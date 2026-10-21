@@ -502,3 +502,31 @@ fn equals_tokens_without_flag_lhs_or_empty_value() {
     assert_eq!(p.options[0].kind, "string");
     assert_eq!(p.options[1].flag, "--x");
 }
+
+#[test]
+fn cobra_colon_command_rows_strip_the_colon() {
+    // gh spells command-table rows `agent-task:   Work with ...` — the
+    // colon is punctuation; keeping it re-probes `gh agent-task:` which
+    // cobra answers with an error page re-listing the ROOT table.
+    let text = "Usage: gh <command>\n\nAvailable Commands:\n  agent-task:   Work with agent tasks\n  pr:   Manage pull requests\n";
+    let p = parse_help(text, 1);
+    let subs: Vec<&str> = p.subcommands.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(subs, ["agent-task", "pr"], "{:?}", p.warnings);
+}
+
+#[test]
+fn error_output_is_not_help_text() {
+    // `gh nosuch --help` exits 0 with `unknown command` + the root
+    // table on stderr — usable-looking but bogus. Parsing it must not
+    // yield subcommands/options, so the help-flag fallback can move on.
+    let text = "unknown command \"nosuch\" for \"gh\"\n\nUsage:  gh <command>\n\nAvailable commands:\n  pr\n  run\n";
+    let p = parse_help(text, 1);
+    assert!(!p.is_usable());
+    assert!(p.options.is_empty() && p.subcommands.is_empty());
+    assert!(p.warnings[0].contains("unknown command"));
+
+    let text2 = "Error: something failed\n\nUsage: t\n\nOptions:\n  -x   x\n";
+    assert!(!parse_help(text2, 1).is_usable());
+    let text3 = "error: bad input\n\nUsage: t\n\nOptions:\n  -x   x\n";
+    assert!(!parse_help(text3, 1).is_usable());
+}

@@ -108,6 +108,19 @@ enum PositionalRow {
 /// usage tokens are the program itself (`["gh","pr","create"]` → 3).
 pub fn parse_help(text: &str, prog_words: usize) -> ParsedHelp {
     let mut out = ParsedHelp::default();
+    // A failed invocation can still print a valid-looking help page —
+    // cobra answers `gh nosuch --help` with `unknown command` + the
+    // ROOT command table (exit 0!). Parsing it re-parents the root
+    // table under a bogus path, so error-shaped output is unusable.
+    if let Some(first) = text.lines().map(str::trim).find(|l| !l.is_empty())
+        && (first.starts_with("unknown command")
+            || first.starts_with("Error:")
+            || first.starts_with("error:"))
+    {
+        out.warnings
+            .push(format!("error output, not help text: `{first}`"));
+        return out;
+    }
     let mut section = Section::None;
     let mut header = String::new();
     let mut opt_rows = 0usize;
@@ -580,7 +593,9 @@ fn parse_command_row(trimmed: &str) -> Option<(String, String)> {
     }
     let desc = trimmed[first.len()..].trim().to_string();
     // Keep the literal token — it is the argv word, not the fn name.
-    Some((first.to_string(), desc))
+    // Cobra/gh spell rows `name:   desc` — the colon is table
+    // punctuation, not part of the command word.
+    Some((first.trim_end_matches(':').to_string(), desc))
 }
 
 /// Parse one `positional arguments:` row — either a named metavar
