@@ -161,3 +161,37 @@ fn empty_subcommand_name_is_rejected() {
     let f = write_spec("name: t\ncommands:\n  \"\": {}\n");
     assert!(CliSpec::load(f.path()).is_err());
 }
+
+#[test]
+fn dump_round_trips_the_command_tree() {
+    let spec: CliSpec = serde_yaml::from_str(
+        r#"
+name: gh
+about: GitHub CLI
+probe: { flag: "-h", max_depth: 2 }
+commands:
+  pr:
+    about: Manage PRs
+    commands:
+      create:
+        options:
+          title: { flag: "--title", kind: string, doc: "PR title" }
+          draft: { flag: "--draft", kind: flag }
+        positionals: [{ name: branch, kind: string, doc: "base" }]
+        rest: { name: extras, kind: string }
+"#,
+    )
+    .unwrap();
+    let yaml = spec.dump();
+    // `probe:` is never emitted — the dumped tree stands alone.
+    assert!(!yaml.contains("probe:"), "{yaml}");
+    let back: CliSpec = serde_yaml::from_str(&yaml).unwrap();
+    assert_eq!(back.name, spec.name);
+    assert_eq!(back.about, spec.about);
+    assert!(back.probe.is_none());
+    assert_eq!(back.root, spec.root);
+    back.validate().unwrap();
+    // Empty maps/vecs/None are skipped — a bare spec dumps as just a name.
+    let bare: CliSpec = serde_yaml::from_str("name: t\n").unwrap();
+    assert_eq!(bare.dump(), "name: t\n");
+}

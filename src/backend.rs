@@ -90,6 +90,9 @@ impl SdkgenBackend for CliBackend {
             };
             let runner = CommandRunner::new();
             let result = probe_tool(&probe_target, &plan, &|t, a| runner.run(t, a));
+            // `confidence:` is consumed by emitters as a header
+            // annotation; the per-node warnings/failures follow it.
+            diagnostics.push(format!("confidence: {}", result.confidence));
             diagnostics.extend(result.diagnostics);
             // Authored commands overlay the probed tree field-by-field.
             let authored = std::mem::take(&mut spec.root.commands);
@@ -108,6 +111,19 @@ impl SdkgenBackend for CliBackend {
 
         diagnostics.extend(self.config.apply(&mut spec));
         spec.validate().map_err(SdkgenError)?;
+
+        // `emit_spec` — the "probe then hand-tune" workflow: dump the
+        // resolved tree as canonical `.clispec.yaml` (`-` → stdout).
+        if let Some(dest) = &self.config.emit_spec {
+            let yaml = spec.dump();
+            if dest == "-" {
+                print!("{yaml}");
+            } else {
+                std::fs::write(dest, yaml).map_err(|e| {
+                    SdkgenError(format!("failed to write emitted spec `{dest}`: {e}"))
+                })?;
+            }
+        }
 
         let target = self.target.clone().unwrap_or_else(|| "host".to_string());
         let mut module = map_spec(&spec, &target);

@@ -1,10 +1,15 @@
 //! Live probing of a CLI tool's `--help` output into a [`CommandNode`]
 //! tree.
 //!
-//! [`probe_tool`] runs `<tool> [path...] --help`, parses the result with
-//! [`crate::help`], and recurses into discovered subcommands up to
-//! `max_depth`. The runner is injectable (`&dyn Fn`) so tests never
-//! spawn a process; [`CommandRunner`] is the real `std::process`
+//! [`probe_tool`] runs `<tool> [path...] <flag>` for each candidate
+//! help flag in turn — the configured flag, then `--help`, `-h`,
+//! `help`, and a bare invocation — and keeps the first output that
+//! parses (git wants `-h`, the openssl family wants `help`). The
+//! result is parsed with [`crate::help`], its warnings land in
+//! [`ProbeResult::diagnostics`], and the worst per-node confidence
+//! becomes [`ProbeResult::confidence`]. Discovered subcommands recurse
+//! up to `max_depth`. The runner is injectable (`&dyn Fn`) so tests
+//! never spawn a process; [`CommandRunner`] is the real `std::process`
 //! implementation used by the backend.
 
 use std::collections::{BTreeMap, HashSet};
@@ -12,7 +17,7 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::help::parse_help;
+use crate::help::{ParsedHelp, parse_help};
 use crate::spec::{CommandNode, OptionSpec, PositionalSpec};
 
 /// The runner signature [`probe_tool`] consumes: `(tool, argv_tail) →
@@ -23,7 +28,7 @@ pub type RunHelp<'a> = dyn Fn(&str, &[String]) -> Result<String, String> + 'a;
 /// Probe recursion parameters resolved from spec + config.
 #[derive(Debug, Clone)]
 pub struct ProbePlan {
-    /// The help flag appended to each probed argv (`--help`).
+    /// The help flag tried first on each probed argv (`--help`).
     pub flag: String,
     /// How many subcommand levels below the root to probe.
     pub max_depth: usize,
@@ -39,16 +44,31 @@ impl Default for ProbePlan {
 }
 
 /// What a probe produced: the discovered command tree plus
-/// non-fatal diagnostics (spawn failures, timeouts).
-#[derive(Debug, Default)]
+/// non-fatal diagnostics (spawn failures, timeouts, parse warnings).
+#[derive(Debug)]
 pub struct ProbeResult {
     /// Subcommands discovered at the root.
     pub commands: BTreeMap<String, CommandNode>,
     /// The root's own options/positionals (a tool without subcommands
     /// still parses to a leaf).
     pub root: CommandNode,
-    /// Non-fatal failures, in probe order.
+    /// Non-fatal failures and parse warnings, in probe order.
     pub diagnostics: Vec<String>,
+    /// Worst per-node parse confidence — `high` | `medium` | `low`.
+    pub confidence: String,
+}
+
+/// The help flags tried in order when `plan.flag` yields no parseable
+/// output. `""` is the bare invocation — some tools print usage on a
+/// no-arg run.
+pub(crate) fn help_candidates(flag: &str) -> Vec<String> {
+    let mut out = vec![flag.to_string()];
+    for f in ["--help", "-h", "help", ""] {
+        if !out.iter().any(|x| x == f) {
+            out.push(f.to_string());
+        }
+    }
+    out
 }
 
 /// The real runner — `<tool> args...` via `std::process::Command`
@@ -122,7 +142,12 @@ impl Default for CommandRunner {
 /// subcommand recursively to `plan.max_depth`. Failures land in
 /// [`ProbeResult::diagnostics`] and never abort the walk.
 pub fn probe_tool(tool: &str, plan: &ProbePlan, run: &RunHelp<'_>) -> ProbeResult {
-    let mut result = ProbeResult::default();
+    let mut result = ProbeResult {
+        commands: BTreeMap::new(),
+        root: CommandNode::default(),
+        diagnostics: Vec::new(),
+        confidence: "high".to_string(),
+    };
     let mut visited = HashSet::new();
     probe_node(
         tool,
@@ -133,12 +158,28 @@ pub fn probe_tool(tool: &str, plan: &ProbePlan, run: &RunHelp<'_>) -> ProbeResul
         run,
         &mut result.root,
         &mut result.diagnostics,
+        &mut result.confidence,
     );
     result.commands = result.root.commands.clone();
     result
 }
 
-/// Fill `node` from `tool [path...] <flag>`, then recurse into each
+/// Confidence ordering — `low` is the worst, `high` the best.
+fn worse(current: &mut String, next: &str) {
+    fn rank(c: &str) -> u8 {
+        match c {
+            "low" => 0,
+            "medium" => 1,
+            _ => 2,
+        }
+    }
+    if rank(next) < rank(current.as_str()) {
+        *current = next.to_string();
+    }
+}
+
+/// Fill `node` from `tool [path...] <flag>`, trying each candidate
+/// help flag until one returns parseable text, then recurse into each
 /// discovered subcommand while `depth < max_depth`.
 fn probe_node(
     tool: &str,
@@ -149,37 +190,74 @@ fn probe_node(
     run: &RunHelp<'_>,
     node: &mut CommandNode,
     diagnostics: &mut Vec<String>,
+    confidence: &mut String,
 ) {
-    let args: Vec<String> = path.iter().cloned().chain([plan.flag.clone()]).collect();
     let dotted = path.join(".");
-    let text = match run(tool, &args) {
-        Ok(t) => t,
-        Err(e) => {
-            let shown = if dotted.is_empty() {
-                tool.to_string()
-            } else {
-                format!("{tool} {dotted}")
-            };
-            diagnostics.push(format!(
-                "probe `{shown} {flag}` failed: {e}",
-                flag = plan.flag
-            ));
-            return;
-        }
+    let shown = if dotted.is_empty() {
+        tool.to_string()
+    } else {
+        format!("{tool} {dotted}")
     };
-    let parsed = parse_help(&text, path.len() + 1);
+
+    let mut parsed: Option<(String, ParsedHelp)> = None;
+    let mut first_err: Option<String> = None;
+    for flag in help_candidates(&plan.flag) {
+        let mut args: Vec<String> = path.to_vec();
+        if !flag.is_empty() {
+            args.push(flag.clone());
+        }
+        match run(tool, &args) {
+            Ok(text) => {
+                let p = parse_help(&text, path.len() + 1);
+                if p.is_usable() {
+                    parsed = Some((flag, p));
+                    break;
+                }
+                first_err.get_or_insert_with(|| "output did not parse".to_string());
+            }
+            Err(e) => {
+                first_err.get_or_insert(e);
+            }
+        }
+    }
+
+    let Some((used_flag, parsed)) = parsed else {
+        diagnostics.push(format!(
+            "probe `{shown} {flag}` failed: {e}",
+            flag = plan.flag,
+            e = first_err.unwrap_or_default()
+        ));
+        worse(confidence, "low");
+        return;
+    };
+    if used_flag != plan.flag {
+        let used = if used_flag.is_empty() {
+            "a bare invocation".to_string()
+        } else {
+            format!("`{used_flag}`")
+        };
+        diagnostics.push(format!(
+            "{shown}: `{}` gave no parseable help — used {used}",
+            plan.flag
+        ));
+    }
+    for w in &parsed.warnings {
+        diagnostics.push(format!("{shown}: {w}"));
+    }
+    worse(confidence, parsed.confidence());
+
     for pos in parsed.positionals {
         node.positionals.push(PositionalSpec {
             name: pos.name,
             kind: "string".to_string(),
-            doc: None,
+            doc: pos.doc,
         });
     }
     if let Some(rest) = parsed.rest {
         node.rest = Some(PositionalSpec {
             name: rest.name,
             kind: "string".to_string(),
-            doc: None,
+            doc: rest.doc,
         });
     }
     for opt in parsed.options {
@@ -190,10 +268,7 @@ fn probe_node(
         });
     }
     for (name, about) in parsed.subcommands {
-        let entry = node
-            .commands
-            .entry(name.clone())
-            .or_insert_with(CommandNode::default);
+        let entry = node.commands.entry(name.clone()).or_default();
         if entry.about.is_none() && !about.is_empty() {
             entry.about = Some(about);
         }
@@ -213,6 +288,7 @@ fn probe_node(
                     run,
                     entry,
                     diagnostics,
+                    confidence,
                 );
             }
         }

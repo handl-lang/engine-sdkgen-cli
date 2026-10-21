@@ -1,0 +1,24 @@
+Usage: find [-H] [-L] [-P] [-Olevel] [-D debugopts] [path...] [expression]
+
+default path is the current directory;  default expression is -print
+expression may consist of:  operators (decreasing precedence; -a is implicit), options, tests, and actions:
+
+operators (decreasing precedence; -a is implicit):
+     ( EXPR )       ! EXPR        -not EXPR          EXPR1 -a EXPR2
+     EXPR1 -o EXPR2              EXPR1 , EXPR2
+
+positional options (always true):
+     -daystart -follow -regextype -warn
+
+normal options (always true, specified before expression):
+     -depth -maxdepth LEVELS -mindepth LEVELS -mount -noleaf --version
+     -help
+
+tests (N can be +N or -N or N):
+     -amin N -anewer FILE -atime N -cmin N
+     -cnewer FILE -ctime N -empty -false -fstype TYPE -gid N
+     -group NAME -ilname PATTERN -iname PATTERN -inum N
+
+actions:
+     -delete -print0 -fprintf FILE FORMAT -print -fprint0 FILE -fprint FILE
+     -ls -fls FILE -prune -quit -exec COMMAND ; -exec COMMAND {} +

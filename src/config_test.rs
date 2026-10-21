@@ -173,3 +173,9 @@ fn apply_runs_drop_and_types_before_rename() {
     assert_eq!(pr.commands["make"].options["reviewers"].kind, "strings");
     assert!(!pr.commands.contains_key("delete"));
 }
+
+#[test]
+fn emit_spec_loads_from_the_config_file() {
+    let c = config("emit_spec: out.clispec.yaml\n");
+    assert_eq!(c.emit_spec.as_deref(), Some("out.clispec.yaml"));
+}

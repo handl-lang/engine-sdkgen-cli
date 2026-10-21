@@ -109,7 +109,7 @@ fn duplicate_subcommand_rows_probe_once() {
     let calls = Mutex::new(0usize);
     let run = |_: &str, args: &[String]| {
         *calls.lock().unwrap() += 1;
-        Ok(if args == &["add".to_string(), "--help".to_string()] {
+        Ok(if args == ["add".to_string(), "--help".to_string()] {
             ADD_HELP.to_string()
         } else {
             dup.to_string()
@@ -165,4 +165,117 @@ fn probe_plan_defaults() {
     // with_timeout round-trips through the same struct.
     let _ = CommandRunner::with_timeout(std::time::Duration::from_millis(1));
     drop(r);
+}
+
+#[test]
+fn falls_back_to_dash_h_when_help_unparses() {
+    // git-style: `--help` and `help` produce nothing parseable, `-h` wins.
+    let run = canned(&[
+        (&["--help"], Ok("git: 'help' is not a git command")),
+        (&["-h"], Ok("Usage: tool [-f] <n>\n\nFlags:\n  -f  force\n")),
+        (&["help"], Ok("nope")),
+    ]);
+    let r = probe_tool("tool", &ProbePlan::default(), &run);
+    assert!(r.root.options.contains_key("f"));
+    assert!(
+        r.diagnostics.iter().any(|d| d.contains("`-h`")),
+        "{:?}",
+        r.diagnostics
+    );
+}
+
+#[test]
+fn falls_back_to_help_subcommand_then_bare_invocation() {
+    // openssl-style: only `tool help` parses.
+    let run = canned(&[
+        (&["--help"], Err("unknown option")),
+        (&["-h"], Err("unknown option")),
+        (&["help"], Ok("Usage: tool <cmd>\n\nCommands:\n  s  sub\n")),
+    ]);
+    let r = probe_tool("tool", &ProbePlan::default(), &run);
+    assert!(r.commands.contains_key("s"));
+    assert!(
+        r.diagnostics.iter().any(|d| d.contains("`help`")),
+        "{:?}",
+        r.diagnostics
+    );
+
+    // Only the bare invocation produces text.
+    let run = canned(&[
+        (&["--help"], Err("x")),
+        (&["-h"], Err("x")),
+        (&["help"], Err("x")),
+        (&[], Ok("Usage: tool\n")),
+    ]);
+    let r = probe_tool("tool", &ProbePlan::default(), &run);
+    assert!(
+        r.diagnostics.iter().any(|d| d.contains("bare invocation")),
+        "{:?}",
+        r.diagnostics
+    );
+}
+
+#[test]
+fn all_candidates_failing_keeps_the_first_error() {
+    let run = canned(&[
+        (&["--help"], Err("spawn exploded")),
+        (&["-h"], Err("other")),
+        (&["help"], Err("other")),
+        (&[], Err("other")),
+    ]);
+    let r = probe_tool("tool", &ProbePlan::default(), &run);
+    assert_eq!(r.diagnostics.len(), 1);
+    assert!(
+        r.diagnostics[0].contains("spawn exploded"),
+        "{:?}",
+        r.diagnostics
+    );
+    assert_eq!(r.confidence, "low");
+}
+
+#[test]
+fn unusable_output_advances_to_the_next_candidate() {
+    let run = canned(&[
+        (&["--help"], Ok("just prose\n")),
+        (&["-h"], Ok("Usage: tool\n")),
+    ]);
+    let r = probe_tool("tool", &ProbePlan::default(), &run);
+    assert!(
+        r.diagnostics.iter().any(|d| d.contains("`-h`")),
+        "{:?}",
+        r.diagnostics
+    );
+}
+
+#[test]
+fn parse_warnings_and_confidence_propagate() {
+    let warned = "Usage: tool\n\nFlags:\n  --    bad\n  -x    ok\n";
+    let run = canned(&[(&["--help"], Ok(warned))]);
+    let r = probe_tool("tool", &ProbePlan::default(), &run);
+    assert!(
+        r.diagnostics
+            .iter()
+            .any(|d| d.contains("tool: unparsed flag-like row")),
+        "{:?}",
+        r.diagnostics
+    );
+    assert_eq!(r.confidence, "medium");
+}
+
+#[test]
+fn configured_flag_wins_first_and_skips_diagnostics() {
+    let run = canned(&[(&["help"], Ok("Usage: tool\n"))]);
+    let plan = ProbePlan {
+        flag: "help".into(),
+        max_depth: 1,
+    };
+    let r = probe_tool("tool", &plan, &run);
+    // The configured flag was the first candidate — no fallback note.
+    assert!(r.diagnostics.is_empty(), "{:?}", r.diagnostics);
+}
+
+#[test]
+fn help_candidates_order_and_dedup() {
+    assert_eq!(help_candidates("--help"), ["--help", "-h", "help", ""]);
+    assert_eq!(help_candidates("-h"), ["-h", "--help", "help", ""]);
 }

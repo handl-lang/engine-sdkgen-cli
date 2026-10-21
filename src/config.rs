@@ -5,6 +5,7 @@
 //! drop: ["pr.delete"]                   # remove a command subtree
 //! types: { "pr.create.reviewers": strings }  # override an option/positional kind
 //! max_depth: 2                          # probe recursion cap
+//! emit_spec: gh.clispec.yaml            # dump the resolved tree ("-" for stdout)
 //! ```
 //!
 //! The overlay is applied after spec load or probing. All dotted paths
@@ -30,6 +31,10 @@ pub struct CliConfig {
     pub types: BTreeMap<String, String>,
     /// Probe recursion cap — overrides the spec's `probe.max_depth`.
     pub max_depth: Option<usize>,
+    /// Write the resolved command tree (post-probe, post-overlay) as a
+    /// canonical `.clispec.yaml` to this path — the "probe then
+    /// hand-tune" workflow. `"-"` writes to stdout.
+    pub emit_spec: Option<String>,
 }
 
 impl CliConfig {

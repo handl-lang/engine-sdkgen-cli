@@ -105,6 +105,28 @@ pub(crate) fn build_port(module: &SdkgenModule, lib: &str) -> String {
     if let Some(source) = &module.source {
         out.push_str(&format!("--- source: {source}\n"));
     }
+    // Probe diagnostics surface as header annotations — a
+    // `confidence: low` verdict gets a note pointing at the authored
+    // paths (aCLImatise-style "know when the scrape is unreliable").
+    if let Some(confidence) = module
+        .diagnostics
+        .iter()
+        .find_map(|d| d.strip_prefix("confidence:"))
+        .map(str::trim)
+    {
+        out.push_str(&format!("--- confidence: {confidence}\n"));
+        if confidence == "low" {
+            out.push_str(&format!(
+                "--- warning: `--help` probe of `{}` is low-confidence; author a .clispec.yaml or pass --config to correct it\n",
+                module.library
+            ));
+        }
+    }
+    for d in &module.diagnostics {
+        if !d.starts_with("confidence:") {
+            out.push_str(&format!("--- diagnostic: {d}\n"));
+        }
+    }
     out.push('\n');
     out.push_str("from \"result\" import { Result }\n");
     // Backend-declared imports — `cli` carries `Output`/`Spawn`.
@@ -216,6 +238,9 @@ pub(crate) fn build_adapter(module: &SdkgenModule, lib: &str, adapter_pkg: &str)
             .map(|a| safe_ident(&a.name))
             .collect::<Vec<_>>()
             .join(", ");
+        if f.arg_descriptors.iter().any(|d| d == "meta:json-capable") {
+            out.push_str("--- json-capable\n");
+        }
         out.push_str(&format!(
             "export {}: {} := ({}) ~> do {{\n",
             f.name, f.port_name, arg_names

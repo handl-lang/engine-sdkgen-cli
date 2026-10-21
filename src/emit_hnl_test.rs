@@ -174,3 +174,51 @@ fn empty_module_still_emits_headers() {
     // No functions → no port import line (the `cli-c` import stays).
     assert!(!adapter.contains("from \"../"));
 }
+
+#[test]
+fn port_stamps_confidence_and_diagnostics() {
+    let mut module = gh_module();
+    module.library = "gh".to_string();
+    module.diagnostics = vec![
+        "confidence: low".to_string(),
+        "gh pr: unparsed flag-like row: `-- weird`".to_string(),
+    ];
+    let port = build_port(&module, "gh");
+    assert!(port.contains("--- confidence: low\n"), "{port}");
+    assert!(
+        port.contains("low-confidence; author a .clispec.yaml or pass --config"),
+        "{port}"
+    );
+    assert!(
+        port.contains("--- diagnostic: gh pr: unparsed flag-like row: `-- weird`\n"),
+        "{port}"
+    );
+    // The `confidence:` marker is consumed, not re-emitted as a diagnostic.
+    assert!(!port.contains("--- diagnostic: confidence:"), "{port}");
+}
+
+#[test]
+fn high_confidence_stamps_without_the_warning_note() {
+    let mut module = gh_module();
+    module.diagnostics = vec!["confidence: high".to_string()];
+    let port = build_port(&module, "gh");
+    assert!(port.contains("--- confidence: high\n"), "{port}");
+    assert!(!port.contains("low-confidence"), "{port}");
+}
+
+#[test]
+fn adapter_marks_json_capable_commands() {
+    let mut module = gh_module();
+    module.functions[0]
+        .arg_descriptors
+        .push("meta:json-capable".to_string());
+    let adapter = build_adapter(&module, "gh", "gh-cli-host");
+    assert!(
+        adapter.contains("--- json-capable\nexport gh_pr_create"),
+        "{adapter}"
+    );
+    assert!(
+        !adapter.contains("--- json-capable\nexport gh_pr_list"),
+        "{adapter}"
+    );
+}

@@ -126,3 +126,30 @@ fn rest_element_kind_maps_the_list_port() {
     let m = map_spec(&spec, "host");
     assert_eq!(m.functions[0].port_args[0].port, "[Int]");
 }
+
+#[test]
+fn json_output_flags_tag_a_meta_descriptor() {
+    for opt in [
+        "json: { flag: \"--json\", kind: flag }",
+        "format: { flag: \"--format\", kind: string }",
+        "out: { flag: \"--output\", kind: string }",
+        "o: { flag: \"-o\", kind: string }",
+    ] {
+        let spec: CliSpec = serde_yaml::from_str(&format!("name: t\noptions:\n  {opt}\n")).unwrap();
+        let m = map_spec(&spec, "host");
+        assert!(
+            m.functions[0]
+                .arg_descriptors
+                .contains(&"meta:json-capable".to_string()),
+            "{opt}"
+        );
+    }
+    let spec: CliSpec =
+        serde_yaml::from_str("name: t\noptions:\n  x: { flag: \"-x\", kind: flag }\n").unwrap();
+    let m = map_spec(&spec, "host");
+    assert!(
+        !m.functions[0]
+            .arg_descriptors
+            .contains(&"meta:json-capable".to_string())
+    );
+}

@@ -183,3 +183,23 @@ fn directory_input_is_an_error() {
         other => panic!("expected Failed, got {other:?}"),
     }
 }
+
+#[test]
+fn emit_spec_flows_through_request_config() {
+    // `--config tool.sdkgen.yaml` with `emit_spec:` dumps the resolved
+    // tree — the "probe then hand-tune" entry point.
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = tmp.path().join("t.yaml");
+    std::fs::write(&spec, "name: t\ncommands:\n  a: {}\n").unwrap();
+    let emitted = tmp.path().join("t.clispec.yaml");
+    let cfg = tmp.path().join("t.sdkgen.yaml");
+    std::fs::write(&cfg, format!("emit_spec: {}\n", emitted.display())).unwrap();
+    let output = tmp.path().join("out");
+    let lang = lang();
+    let mut req = request(&spec, &output, &lang);
+    req.config = Some(&cfg);
+    registry().run("cli", &req).unwrap();
+    let text = std::fs::read_to_string(&emitted).unwrap();
+    assert!(text.contains("name: t"), "{text}");
+    assert!(text.contains("a:"), "{text}");
+}

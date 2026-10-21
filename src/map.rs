@@ -11,6 +11,9 @@
 //! - `opt:<kind>:<name>:<flag>` — a named option (`kind` ∈
 //!   `flag|string|int|strings`, `flag` the literal spelling).
 //! - `rest:<name>` — the variadic tail.
+//! - `meta:<hint>` — emitter hints, not argv shape (e.g.
+//!   `meta:json-capable` when the command offers a `--json`/`--format`/
+//!   `--output`/`-o` flag). Emitters ignore `meta:` when rebuilding argv.
 //!
 //! `port_args` aligns: one arg per positional (String/Int/Bool), a
 //! trailing `opts: Obj` iff the command has options, and `rest: [T]`
@@ -63,6 +66,15 @@ fn walk(node: &CommandNode, words: &[String], module: &mut SdkgenModule) {
     }
 }
 
+/// Does the command offer a machine-readable output flag? Rows like
+/// `--format <fmt>`, `--output <fmt>`, `--json`, `-o` mark it.
+fn is_json_capable(node: &CommandNode) -> bool {
+    node.options.iter().any(|(name, opt)| {
+        matches!(name.as_str(), "json" | "format" | "output")
+            || matches!(opt.flag.as_str(), "--json" | "--format" | "--output" | "-o")
+    })
+}
+
 fn leaf_function(node: &CommandNode, words: &[String]) -> Function {
     let base = words.join("_");
     let mut port_args = Vec::new();
@@ -90,6 +102,11 @@ fn leaf_function(node: &CommandNode, words: &[String]) -> Function {
             port: format!("[{}]", positional_port(&rest.kind)),
         });
         descriptors.push(format!("rest:{}", rest.name));
+    }
+    // `meta:` descriptors carry emitter hints, not argv shape — the
+    // `hnl-cli` adapter surfaces them as doc annotations.
+    if is_json_capable(node) {
+        descriptors.push("meta:json-capable".to_string());
     }
 
     Function {

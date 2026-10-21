@@ -79,7 +79,8 @@ fn getopt_style_positional_rest_and_bracket_value() {
         p.positionals,
         vec![ParsedPositional {
             name: "branch".into(),
-            variadic: false
+            variadic: false,
+            doc: None
         }]
     );
     // The `or:` continuation usage line is ignored — `<file>...` never
@@ -120,7 +121,8 @@ fn usage_only_fixture_gives_a_rest() {
         p.rest,
         Some(ParsedPositional {
             name: "text".into(),
-            variadic: true
+            variadic: true,
+            doc: None
         })
     );
     assert!(p.options.is_empty());
@@ -144,11 +146,13 @@ fn usage_variants_all_parse() {
         vec![
             ParsedPositional {
                 name: "in".into(),
-                variadic: false
+                variadic: false,
+                doc: None
             },
             ParsedPositional {
                 name: "opt".into(),
-                variadic: false
+                variadic: false,
+                doc: None
             },
         ]
     );
@@ -157,7 +161,8 @@ fn usage_variants_all_parse() {
         p.rest,
         Some(ParsedPositional {
             name: "tail".into(),
-            variadic: true
+            variadic: true,
+            doc: None
         })
     );
 }
@@ -221,4 +226,279 @@ fn unrecognized_headers_close_sections() {
     let text = "Flags:\n  --a    flag a\n\nExamples:\n  --not-a-flag\n";
     let p = parse_help(text, 1);
     assert_eq!(p.options.len(), 1);
+}
+
+#[test]
+fn go_style_usage_and_commands_header() {
+    let p = parse_help(&fixture("go-help.txt"), 1);
+    // `Usage:` alone, a blank line, then an indented `go <command>` —
+    // the multi-line usage block resolves and `command`/`arguments`
+    // are markers, not positionals.
+    assert!(p.has_usage);
+    assert!(p.positionals.is_empty());
+    assert!(p.rest.is_none());
+    // `The commands are:` is a commands table.
+    let subs: Vec<&str> = p.subcommands.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(subs.contains(&"build") && subs.contains(&"vet"), "{subs:?}");
+    assert_eq!(p.subcommands[0].1, "start a bug report");
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+    assert_eq!(p.confidence(), "high");
+}
+
+#[test]
+fn argparse_positional_section_annotates_group_and_docs() {
+    let p = parse_help(&fixture("argparse.txt"), 1);
+    // The `{clone,pull,push}` positional row describes the usage-group
+    // subcommands — no unmatched-group warning, and the desc lands.
+    let clone = p.subcommands.iter().find(|(n, _)| n == "clone").unwrap();
+    assert_eq!(clone.1, "action to perform");
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+}
+
+#[test]
+fn positional_arguments_rows_doc_the_positionals() {
+    let text = "usage: tool <src> <dst> [files]...\n\npositional arguments:\n  src     input file\n  dst     output file\n  files   extra files\n";
+    let p = parse_help(text, 1);
+    assert_eq!(p.positionals[0].doc.as_deref(), Some("input file"));
+    assert_eq!(p.positionals[1].doc.as_deref(), Some("output file"));
+    assert_eq!(p.rest.as_ref().unwrap().doc.as_deref(), Some("extra files"));
+}
+
+#[test]
+fn arguments_and_args_headers_are_positional_sections() {
+    for head in ["Arguments:", "Args:"] {
+        let text = format!("usage: tool <in>\n\n{head}\n  in   the input\n");
+        let p = parse_help(&text, 1);
+        assert_eq!(p.positionals[0].doc.as_deref(), Some("the input"), "{head}");
+    }
+}
+
+#[test]
+fn multiline_usage_continuation_lines_parse_as_alternates() {
+    let text = "Usage: prog [opts] <a>\n       prog [opts] <b>\n       (annotation, not usage)\n\nFlags:\n  -f   flag\n";
+    let p = parse_help(text, 1);
+    let names: Vec<&str> = p.positionals.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names, ["a", "b"]);
+    // The parenthesized annotation is consumed but not parsed.
+    assert!(!names.contains(&"annotation"));
+}
+
+#[test]
+fn single_dash_long_options_parse() {
+    let p = parse_help(&fixture("openssl-s-help.txt"), 1);
+    let names: Vec<&str> = p.options.iter().map(|o| o.name.as_str()).collect();
+    // `Valid options are:` is an options table; `-cipher` is a long
+    // flag spelled with one dash.
+    assert!(names.contains(&"cipher"), "{names:?}");
+    assert!(names.contains(&"verify"), "{names:?}");
+    assert!(names.contains(&"nbio"), "{names:?}");
+    let cipher = p.options.iter().find(|o| o.name == "cipher").unwrap();
+    assert_eq!(cipher.flag, "-cipher");
+    assert_eq!(cipher.kind, "string");
+    assert_eq!(p.confidence(), "high");
+}
+
+#[test]
+fn brace_group_unmatched_by_table_warns() {
+    // `{a|b}` in usage but no commands table describing them.
+    let p = parse_help("usage: prog {a|b}\n\nFlags:\n  -x   x\n", 1);
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("unmatched") && w.contains("`a`, `b`")),
+        "{:?}",
+        p.warnings
+    );
+    // A commands table row satisfies the match.
+    let p = parse_help(
+        "usage: prog {a|b}\n\nCommands:\n  a  does a\n  b  does b\n",
+        1,
+    );
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+    assert_eq!(p.subcommands[0].1, "does a");
+}
+
+#[test]
+fn missing_usage_line_warns() {
+    let p = parse_help("Flags:\n  -x   x\n", 1);
+    assert!(p.warnings.iter().any(|w| w.contains("no usage line")));
+}
+
+#[test]
+fn empty_options_section_warns() {
+    let text = "Usage: t\n\nFlags:\n  notaflag nope\n\nCommands:\n  go  go\n";
+    let p = parse_help(text, 1);
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("options section `Flags` produced no option rows")),
+        "{:?}",
+        p.warnings
+    );
+    assert_eq!(p.subcommands.len(), 1);
+}
+
+#[test]
+fn flag_like_rows_that_fail_parse_warn() {
+    let text = "Usage: t\n\nFlags:\n  --    lone dashes\n  -x    ok\n";
+    let p = parse_help(text, 1);
+    assert_eq!(p.options.len(), 1);
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("unparsed flag-like row")),
+        "{:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn multi_flag_rows_warn_about_dropped_spellings() {
+    let text = "Usage: t\n\nOptions:\n  -D -O -P -debug   bundled\n  -v, --verbose   v\n";
+    let p = parse_help(text, 1);
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("several flag spellings")),
+        "{:?}",
+        p.warnings
+    );
+    // `-v, --verbose` is the canonical pair — no warning for it.
+    assert_eq!(p.warnings.len(), 1);
+    assert_eq!(p.options[0].name, "debug");
+    assert_eq!(p.options[1].name, "verbose");
+}
+
+#[test]
+fn unknown_headers_carrying_rows_warn() {
+    let text =
+        "Usage: t\n\nExamples:\n  foo bar   an example\n  baz qux   another\n\nFlags:\n  -x   x\n";
+    let p = parse_help(text, 1);
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("unrecognized section `Examples` carried 2 table rows")),
+        "{:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn headerless_stray_rows_warn() {
+    let text = "Usage: t [x]...\n\n  bs=BYTES    block size\n  if=FILE     input\n\n  --help      show help\n";
+    let p = parse_help(text, 1);
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("2 table rows appeared outside a recognized section")),
+        "{:?}",
+        p.warnings
+    );
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("1 flag-like rows appeared outside an options section")),
+        "{:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn confidence_levels() {
+    // Options/subcommands absent → low even with a clean parse.
+    assert_eq!(parse_help("Usage: echo [TEXT]...\n", 1).confidence(), "low");
+    // Clean parse with options → high.
+    assert_eq!(
+        parse_help("Usage: t\n\nFlags:\n  -x   x\n", 1).confidence(),
+        "high"
+    );
+    // Usable but warned → medium.
+    assert_eq!(
+        parse_help("Usage: t\n\nFlags:\n  --    bad\n  -x   ok\n", 1).confidence(),
+        "medium"
+    );
+    // Unusable → !is_usable.
+    assert!(!parse_help("just prose\n", 1).is_usable());
+    assert!(parse_help("Usage: t\n", 1).is_usable());
+}
+
+#[test]
+fn indented_colon_headers_recognize_sections() {
+    // java-style: ` where options include:` is indented one space.
+    let text = "Usage: java [options] <mainclass> [args...]\n\n where options include:\n\n    -version      print version\n    -cp <path>    class path\n";
+    let p = parse_help(text, 1);
+    let names: Vec<&str> = p.options.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(names, ["version", "cp"], "{names:?}");
+    assert_eq!(p.options[0].flag, "-version");
+    assert_eq!(p.options[1].kind, "string");
+}
+
+#[test]
+fn or_lines_usage_without_body_and_bad_positional_rows() {
+    // `or:` outside a usage block is ignored outright.
+    let p = parse_help("or: not usage\nUsage: t\n\nFlags:\n  -x   x\n", 1);
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+
+    // `Usage:` alone followed by an unindented line has no body.
+    let p = parse_help("Usage:\nFlags:\n  -x   x\n", 1);
+    assert!(p.has_usage);
+    assert_eq!(p.options.len(), 1);
+
+    // Positional-section rows that are not metavars are skipped;
+    // a bare name still yields a doc-free row.
+    let text = "usage: t <in>\n\npositional arguments:\n  in     the input\n  -v     not a metavar\n  {}\n  []\n  NODE\n";
+    let p = parse_help(text, 1);
+    assert_eq!(p.positionals[0].doc.as_deref(), Some("the input"));
+}
+
+#[test]
+fn usage_opt_group_metavar_and_empty_brace_parts() {
+    // `[-D debug opts]` — the bracket group swallows every token to `]`.
+    let p = parse_help("usage: t [-D debug opts] <in>\n", 1);
+    let names: Vec<&str> = p.positionals.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names, ["in"], "{names:?}");
+    // `{a||b}` — an empty choice part is skipped, not made a subcommand.
+    let p = parse_help("usage: t {a||b}\n\nCommands:\n  a  a\n  b  b\n", 1);
+    let subs: Vec<&str> = p.subcommands.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(subs, ["a", "b"]);
+}
+
+#[test]
+fn parenthesized_section_headers_strip_the_annotation() {
+    // `(always true)`-style qualifiers are cut before suffix matching.
+    let text = "Usage: t\n\noptional arguments (always true):\n  --x   x\n";
+    let p = parse_help(text, 1);
+    assert_eq!(p.options.len(), 1, "{:?}", p.warnings);
+    assert_eq!(p.options[0].flag, "--x");
+
+    // A parenthesized commands table header also lands.
+    let text = "Usage: t <cmd>\n\nAvailable commands (built-in):\n  run   run it\n";
+    let p = parse_help(text, 1);
+    let subs: Vec<&str> = p.subcommands.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(subs, ["run"], "{:?}", p.warnings);
+}
+
+#[test]
+fn unknown_section_prose_rows_are_ignored_quietly() {
+    // A `Section::None` row that is neither flag-like nor a table row is
+    // skipped without counting toward `stray_rows`/`unknown`.
+    let text =
+        "Usage: t\n\nExamples:\n  run the thing and see\n  plain prose\n\nFlags:\n  -x   x\n";
+    let p = parse_help(text, 1);
+    assert!(
+        p.warnings.is_empty(),
+        "prose should not count as table rows: {:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn equals_tokens_without_flag_lhs_or_empty_value() {
+    // `KEY=VAL` is a metavar, not a flag; `--x=` carries an empty value.
+    let text = "Usage: t\n\nOptions:\n  -v KEY=VAL   var\n  --x=         empty\n";
+    let p = parse_help(text, 1);
+    assert_eq!(p.options.len(), 2);
+    assert_eq!(p.options[0].flag, "-v");
+    assert_eq!(p.options[0].kind, "string");
+    assert_eq!(p.options[1].flag, "--x");
 }

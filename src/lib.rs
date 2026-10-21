@@ -4,8 +4,10 @@
 //! Pipeline, in module order:
 //! - [`backend`] — `CliBackend`: `*.clispec.yaml` input or a bare tool
 //!   name probed via `--help`, plus the `--config` overlay.
-//! - [`spec`] — the authored spec format ([`CliSpec`]) and validation.
-//! - [`probe`]/[`help`] — live `--help` capture and its pure parser.
+//! - [`spec`] — the authored spec format ([`CliSpec`]), validation,
+//!   and `dump()` for the probe-then-hand-tune `emit_spec` workflow.
+//! - [`probe`]/[`help`] — live help capture (fallback `--help` → `-h`
+//!   → `help` → bare) and its pure parser with confidence diagnostics.
 //! - [`config`] — `*.sdkgen.yaml` overrides ([`CliConfig`]).
 //! - [`map`] — `CliSpec` → `SdkgenModule` (one `Function` per leaf
 //!   command; see the `arg_descriptors` contract there).

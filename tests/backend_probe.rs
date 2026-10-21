@@ -37,7 +37,7 @@ fn existing_executable_path_is_probed() {
     let m = CliBackend::new(None, CliConfig::default())
         .parse_header(&tool)
         .unwrap();
-    assert!(m.diagnostics.is_empty(), "{:?}", m.diagnostics);
+    assert_eq!(m.diagnostics, ["confidence: high"], "{:?}", m.diagnostics);
     assert_eq!(m.library, "faketool");
     // Both children probed at depth 1 → two leaf functions.
     let mut names = fn_names(&m);
@@ -63,8 +63,9 @@ fn bare_tool_name_probes_path_and_survives_spawn_failure() {
     let m = CliBackend::new(None, CliConfig::default())
         .parse_header(Path::new("no-real-tool-xyz"))
         .unwrap();
-    assert_eq!(m.diagnostics.len(), 1);
-    assert!(m.diagnostics[0].contains("spawn"), "{:?}", m.diagnostics);
+    assert_eq!(m.diagnostics.len(), 2, "{:?}", m.diagnostics);
+    assert_eq!(m.diagnostics[0], "confidence: low");
+    assert!(m.diagnostics[1].contains("spawn"), "{:?}", m.diagnostics);
     assert_eq!(fn_names(&m), ["no_real_tool_xyz"]);
     assert_eq!(m.functions[0].c_decl, "no-real-tool-xyz");
 }
@@ -95,7 +96,7 @@ fn spec_with_probe_merges_authored_over_probed() {
     let m = CliBackend::new(None, CliConfig::default())
         .parse_header(&spec_path)
         .unwrap();
-    assert!(m.diagnostics.is_empty(), "{:?}", m.diagnostics);
+    assert_eq!(m.diagnostics, ["confidence: high"], "{:?}", m.diagnostics);
     let mut names = fn_names(&m);
     names.sort_unstable();
     // `shared` keeps its authored `deep` child → not a leaf; `declared`
@@ -146,6 +147,54 @@ fn spec_probe_flag_and_config_drive_the_plan() {
     let m = CliBackend::new(None, CliConfig::default())
         .parse_header(&spec_path)
         .unwrap();
-    assert_eq!(m.diagnostics.len(), 1);
+    assert_eq!(m.diagnostics.len(), 2);
     assert_eq!(fn_names(&m), ["no_real_tool_xyz_only"]);
+}
+
+#[test]
+fn emit_spec_writes_the_resolved_tree_and_round_trips() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tool = fixture_tool(tmp.path());
+    let out = tmp.path().join("faketool.clispec.yaml");
+    let cfg = CliConfig {
+        emit_spec: Some(out.to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    CliBackend::new(None, cfg).parse_header(&tool).unwrap();
+
+    let spec = handl_plugin_sdkgen_cli::CliSpec::load(&out).unwrap();
+    assert_eq!(spec.name, "faketool");
+    // `probe:` is never emitted — the dumped tree is the resolved one.
+    assert!(spec.probe.is_none());
+    let shared = &spec.root.commands["shared"];
+    assert_eq!(shared.about.as_deref(), Some("Shared thing"));
+    assert_eq!(shared.options["child_opt"].flag, "--child-opt");
+    assert_eq!(shared.positionals[0].name, "name");
+    // Re-loading gives back exactly the tree that was written.
+    let yaml = spec.dump();
+    let again: handl_plugin_sdkgen_cli::CliSpec = serde_yaml::from_str(&yaml).unwrap();
+    assert_eq!(again.root, spec.root);
+}
+
+#[test]
+fn emit_spec_dash_prints_and_bad_dest_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tool = fixture_tool(tmp.path());
+    // `-` writes the spec to stdout — the run still succeeds.
+    let cfg = CliConfig {
+        emit_spec: Some("-".to_string()),
+        ..Default::default()
+    };
+    CliBackend::new(None, cfg).parse_header(&tool).unwrap();
+
+    // A directory as the destination fails the write.
+    let cfg = CliConfig {
+        emit_spec: Some(tmp.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    let e = CliBackend::new(None, cfg).parse_header(&tool).unwrap_err();
+    assert!(
+        e.to_string().contains("failed to write emitted spec"),
+        "{e}"
+    );
 }

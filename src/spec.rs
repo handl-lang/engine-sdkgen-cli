@@ -22,7 +22,7 @@
 //!         rest: { name: extras, kind: string }
 //! ```
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -32,15 +32,21 @@ pub const OPTION_KINDS: &[&str] = &["flag", "string", "int", "strings"];
 pub const POSITIONAL_KINDS: &[&str] = &["string", "int", "bool"];
 
 /// A loaded `*.clispec.yaml` document.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct CliSpec {
     /// Tool/binary name — the module name basis and the probed argv[0].
     pub name: String,
     /// Module doc.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub about: Option<String>,
     /// When present, the spec is overlaid on a live `--help` probe of
     /// `name` (`spec`-authored nodes win; see [`crate::probe`]).
+    ///
+    /// Never emitted by [`CliSpec::dump`] — a dumped spec is the
+    /// *resolved* tree, so re-running a probe on load would discard
+    /// the hand-tuned edits the dump exists to support.
+    #[serde(skip_serializing)]
     pub probe: Option<ProbeSpec>,
     /// The root command node — `commands`, `options`, `positionals`,
     /// `rest` all belong to the tool itself at the top level.
@@ -49,7 +55,7 @@ pub struct CliSpec {
 }
 
 /// `probe:` settings — how deep and with which flag to walk `--help`.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct ProbeSpec {
     /// The help flag appended to each probed argv (default `--help`).
@@ -59,23 +65,28 @@ pub struct ProbeSpec {
 }
 
 /// One node of the command tree.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct CommandNode {
     /// Doc for the emitted function.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub about: Option<String>,
     /// Long options, keyed by spec name.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub options: BTreeMap<String, OptionSpec>,
     /// Positional arguments, in argv order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub positionals: Vec<PositionalSpec>,
     /// Optional variadic tail (`args...`).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rest: Option<PositionalSpec>,
     /// Nested subcommands.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub commands: BTreeMap<String, CommandNode>,
 }
 
 /// A named option (`--title`), keyed under `options:`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct OptionSpec {
     /// The flag spelling handed to the tool (`--title`, `-t`). Must
@@ -86,6 +97,7 @@ pub struct OptionSpec {
     #[serde(default = "default_option_kind")]
     pub kind: String,
     /// Doc for the option.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
 }
 
@@ -100,7 +112,7 @@ impl Default for OptionSpec {
 }
 
 /// A positional argument or the variadic `rest` tail.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PositionalSpec {
     /// Argument name — used for the emitted port arg and the
@@ -110,6 +122,7 @@ pub struct PositionalSpec {
     #[serde(default = "default_positional_kind")]
     pub kind: String,
     /// Doc for the argument.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<String>,
 }
 
@@ -140,6 +153,17 @@ impl CliSpec {
             serde_yaml::from_str(&s).map_err(|e| format!("failed to parse spec: {e}"))?;
         spec.validate()?;
         Ok(spec)
+    }
+
+    /// Serialize the spec back to canonical `.clispec.yaml` — the
+    /// "probe then hand-tune" workflow's emit step (`emit_spec` in the
+    /// config). `probe:` is never written; the emitted tree is the
+    /// resolved one, so the result re-parses via [`CliSpec::load`] to
+    /// the same command tree.
+    pub fn dump(&self) -> String {
+        // Only non-string map keys or IO can fail yaml serialization;
+        // this shape has neither — an error here is a bug, not user input.
+        serde_yaml::to_string(self).expect("CliSpec serialization is infallible")
     }
 
     /// Validate the spec — name, kinds, flag spellings, and per-command

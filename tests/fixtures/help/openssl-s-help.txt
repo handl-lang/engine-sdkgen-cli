@@ -1,0 +1,14 @@
+Usage: s_client [options] [host[:port]]
+
+Valid options are:
+ -help                Display this summary
+ -host val            The -connect option or the -proxy option
+ -port val            The -connect option or the -proxy option
+ -4                   Use IPv4 only
+ -6                   Use IPv6 only
+ -cipher val          TLS cipher list to offer
+ -verify int          Turn on peer certificate verification
+ -verify_return_error Return verification errors
+ -msg                 Show all protocol messages with hex dump
+ -nbio                Run with non-blocking IO
+ -brief               Only print a summary of the connection
