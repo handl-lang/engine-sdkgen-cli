@@ -1,0 +1,12 @@
+git-checkout - Switch branches or restore working tree files
+
+usage: git checkout [<options>] <branch>
+   or: git checkout [<options>] [<branch>] -- <file>...
+
+OPTIONS:
+  -b <branch>                 create and checkout a new branch
+  -f, --force                 throw away local modifications
+  -t, --track[=(direct|inherit)]  set branch tracking mode
+      --detach                detach HEAD at named commit
+      --orphan <new-branch>   new unborn branch
+  -n, --dry-run               do not actually update files

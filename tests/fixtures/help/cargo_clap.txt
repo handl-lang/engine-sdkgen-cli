@@ -1,0 +1,16 @@
+Rust's package manager
+
+Usage: cargo [OPTIONS] [COMMAND]
+
+Options:
+  -V, --version           Print version info and exit
+  -v, --verbose...        Use verbose output (-vv very verbose)
+      --color <WHEN>      Coloring: auto, always, never
+      --jobs <N>          Number of parallel jobs
+  -h, --help              Print help
+
+Commands:
+  build       Compile the current package
+  check       Check the current package
+  run         Run a binary or example
+  test        Run the tests

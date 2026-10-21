@@ -1,0 +1,176 @@
+use super::emit_hnl::*;
+use crate::map::map_spec;
+use crate::spec::CliSpec;
+use handl_language::Language;
+use handl_plugin_sdkgen::{Emitter, SdkgenModule};
+use std::sync::Arc;
+
+fn lang() -> Arc<Language> {
+    Arc::new(handl_kit_data_prelude::language_from_yaml().unwrap())
+}
+
+fn gh_module() -> SdkgenModule {
+    let spec: CliSpec = serde_yaml::from_str(
+        r#"
+name: gh
+commands:
+  pr:
+    commands:
+      create:
+        about: Create a pull request
+        options:
+          title: { flag: "--title", kind: string }
+          draft: { flag: "--draft", kind: flag }
+        positionals: [{ name: branch, kind: string }]
+        rest: { name: extras, kind: string }
+      list: {}
+"#,
+    )
+    .unwrap();
+    let mut m = map_spec(&spec, "host");
+    m.source = Some("https://example/spec.yaml".to_string());
+    m
+}
+
+#[test]
+fn port_declares_colon_style_exports() {
+    let port = build_port(&gh_module(), "gh");
+    assert!(port.contains("--- Generated port for gh.gh\n"), "{port}");
+    assert!(port.contains("--- cli target: host\n"), "{port}");
+    assert!(port.contains("--- source: https://example/spec.yaml\n"));
+    assert!(port.contains("from \"result\" import { Result }\n"));
+    assert!(port.contains("from \"cli\" import { Output, Spawn }\n"));
+    assert!(port.contains("--- Create a pull request\n"));
+    assert!(port.contains("--- cli: gh pr create\n"));
+    assert!(
+        port.contains("export GhPrCreate: (String, Obj, [String]) ~[1]~> Result<Output, Spawn>\n"),
+        "{port}"
+    );
+    assert!(
+        port.contains("export GhPrList: () ~[1]~> Result<Output, Spawn>\n"),
+        "{port}"
+    );
+}
+
+#[test]
+fn adapter_binds_flags_and_calls_run() {
+    let adapter = build_adapter(&gh_module(), "gh", "gh-cli-host");
+    assert!(adapter.contains("--- Generated adapter for gh-cli-host/gh\n"));
+    assert!(adapter.contains("from \"cli-c\" import { run, argv }\n"));
+    assert!(
+        adapter.contains("from \"../gh/gh\" import { GhPrCreate, GhPrList }\n"),
+        "{adapter}"
+    );
+    assert!(
+        adapter.contains(
+            "gh_pr_create_flags := [{ name: \"draft\", flag: \"--draft\", kind: \"flag\" }, { name: \"title\", flag: \"--title\", kind: \"string\" }]"
+        ),
+        "{adapter}"
+    );
+    assert!(adapter.contains("gh_pr_list_flags := []\n"), "{adapter}");
+    assert!(
+        adapter.contains(
+            "export gh_pr_create: GhPrCreate := (branch, opts, extras) ~> do {\n  run(argv(\"gh\", [\"pr\", \"create\"], [branch], gh_pr_create_flags, opts, extras))\n}\n"
+        ),
+        "{adapter}"
+    );
+    assert!(
+        adapter.contains(
+            "export gh_pr_list: GhPrList := () ~> do {\n  run(argv(\"gh\", [\"pr\", \"list\"], [], gh_pr_list_flags, null, []))\n}\n"
+        ),
+        "{adapter}"
+    );
+}
+
+#[test]
+fn emitted_source_canonicalizes() {
+    let module = gh_module();
+    let port = canonicalize(&lang(), build_port(&module, "gh"));
+    // The formatter normalizes — `Result<Output, Spawn>` spacing.
+    assert!(port.contains("export GhPrCreate"), "{port}");
+    // Canonical output parses again.
+    let again = canonicalize(&lang(), port.clone());
+    assert_eq!(port, again);
+}
+
+#[test]
+fn unparseable_source_falls_back_to_raw() {
+    // A backslash has no lexer rule — the canonical fmt fails and the
+    // raw text is returned instead.
+    let raw = "a \\ b".to_string();
+    assert_eq!(canonicalize(&lang(), raw.clone()), raw);
+}
+
+#[test]
+fn target_slug_extracts_os_and_arch() {
+    assert_eq!(target_slug("x86_64-unknown-linux"), "linux-x86_64");
+    assert_eq!(target_slug("aarch64-apple-darwin"), "darwin-aarch64");
+    assert_eq!(target_slug("host"), "host");
+    assert_eq!(target_slug("wasm32-wasi"), "wasi-wasm32");
+}
+
+#[test]
+fn keyword_arg_names_get_an_underscore() {
+    assert_eq!(safe_ident("type"), "type_");
+    assert_eq!(safe_ident("branch"), "branch");
+}
+
+#[test]
+fn emit_writes_port_and_adapter_files() {
+    let module = gh_module();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("gh");
+    HnlCliEmitter::new(lang()).emit(&module, &out).unwrap();
+    let port = std::fs::read_to_string(out.join("gh.hnl")).unwrap();
+    let adapter = std::fs::read_to_string(tmp.path().join("gh-cli-host").join("gh.hnl")).unwrap();
+    assert!(port.contains("export GhPrCreate:"), "{port}");
+    assert!(adapter.contains("run(argv("), "{adapter}");
+}
+
+#[test]
+fn emit_surfaces_dir_and_write_failures() {
+    let module = gh_module();
+    let tmp = tempfile::tempdir().unwrap();
+    // output inside an existing *file* → create_dir_all fails.
+    let blocker = tmp.path().join("blocker");
+    std::fs::write(&blocker, b"x").unwrap();
+    let e = HnlCliEmitter::new(lang())
+        .emit(&module, &blocker.join("gh"))
+        .unwrap_err();
+    assert!(e.to_string().contains("failed to create output dir"), "{e}");
+
+    // adapter dir collides with a file → create_dir_all fails.
+    std::fs::write(tmp.path().join("gh-cli-host"), b"x").unwrap();
+    let e = HnlCliEmitter::new(lang())
+        .emit(&module, &tmp.path().join("gh"))
+        .unwrap_err();
+    assert!(
+        e.to_string().contains("failed to create adapter dir"),
+        "{e}"
+    );
+    std::fs::remove_file(tmp.path().join("gh-cli-host")).unwrap();
+
+    // `{module}.hnl` pre-existing as a directory → write fails.
+    let out = tmp.path().join("gh2");
+    std::fs::create_dir_all(out.join("gh.hnl")).unwrap();
+    let e = HnlCliEmitter::new(lang()).emit(&module, &out).unwrap_err();
+    assert!(e.to_string().contains("failed to write"), "{e}");
+
+    // adapter `{module}.hnl` as a directory → second write fails.
+    let out2 = tmp.path().join("gh3");
+    std::fs::create_dir_all(tmp.path().join("gh3-cli-host").join("gh.hnl")).unwrap();
+    let e = HnlCliEmitter::new(lang()).emit(&module, &out2).unwrap_err();
+    assert!(e.to_string().contains("failed to write"), "{e}");
+}
+
+#[test]
+fn empty_module_still_emits_headers() {
+    let mut module = SdkgenModule::default();
+    module.module = "empty".to_string();
+    module.target = "host".to_string();
+    let port = build_port(&module, "lib");
+    assert!(port.contains("--- Generated port for lib.empty\n"));
+    let adapter = build_adapter(&module, "lib", "lib-cli-host");
+    // No functions → no port import line (the `cli-c` import stays).
+    assert!(!adapter.contains("from \"../"));
+}

@@ -1,0 +1,17 @@
+Create a pull request on GitHub.
+
+Usage:
+  gh pr create [flags]
+
+Flags:
+  -t, --title string        Title of the pull request
+  -b, --body string         Body of the pull request
+      --draft               Mark the pull request as a draft
+  -l, --label name          Add labels (can be used multiple times)
+  -j, --jobs int            Maximum jobs to run in parallel
+
+Global Flags:
+  -R, --repo <[HOST/]OWNER/REPO>   Select another repository
+      --verbose                    Enable verbose output
+
+See 'gh help pr create' for more information.

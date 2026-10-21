@@ -1,0 +1,11 @@
+usage: prog [-h] {clone,pull,push} ...
+
+A tool.
+
+positional arguments:
+  {clone,pull,push}   action to perform
+
+options:
+  -h, --help  show this help message and exit
+  --depth N   shallow fetch depth
+  --json      emit JSON

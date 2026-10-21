@@ -1,0 +1,13 @@
+--- Generated port for gh.gh
+--- cli target: host
+
+from "result" import { Result }
+from "cli" import { Output, Spawn }
+
+--- Create a pull request
+--- cli: gh pr create
+export GhPrCreate: (String, Obj, [String]) ~[1]~> Result<Output, Spawn>
+
+--- List pull requests
+--- cli: gh pr list
+export GhPrList: () ~[1]~> Result<Output, Spawn>
