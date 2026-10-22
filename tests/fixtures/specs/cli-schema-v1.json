@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "name": "deploy",
+  "version": "2.1.0",
+  "description": "Deploy and manage environments",
+  "globalOptions": [
+    {
+      "role": "flag",
+      "name": "verbose",
+      "shortName": "v",
+      "type": "boolean",
+      "required": false,
+      "summary": "Enable verbose output"
+    }
+  ],
+  "rootDefault": {
+    "kind": "root",
+    "summary": "Show deployment status",
+    "parameters": [
+      {
+        "role": "flag",
+        "name": "watch",
+        "shortName": "w",
+        "type": "boolean",
+        "required": false,
+        "summary": "Stream status updates"
+      }
+    ]
+  },
+  "namespaces": [
+    {
+      "segment": "env",
+      "summary": "Manage deployment environments",
+      "options": [
+        {
+          "role": "flag",
+          "name": "region",
+          "shortName": "r",
+          "type": "string",
+          "required": false,
+          "summary": "Target region"
+        }
+      ],
+      "commands": [
+        {
+          "name": "apply",
+          "summary": "Apply a configuration to an environment",
+          "parameters": [
+            {
+              "role": "positional",
+              "name": "environment",
+              "type": "string",
+              "required": true,
+              "summary": "Target environment"
+            },
+            {
+              "role": "flag",
+              "name": "file",
+              "shortName": "f",
+              "type": "string",
+              "required": true,
+              "summary": "Config file to apply"
+            },
+            {
+              "role": "flag",
+              "name": "tag",
+              "type": "array",
+              "repeatable": true,
+              "required": false,
+              "summary": "Deployment tags"
+            },
+            {
+              "role": "dryRun",
+              "name": "dry-run",
+              "type": "boolean",
+              "required": false,
+              "summary": "Preview the apply"
+            },
+            {
+              "role": "positional",
+              "name": "extras",
+              "type": "string",
+              "required": false,
+              "variadic": true,
+              "summary": "Extra arguments passed through"
+            }
+          ]
+        },
+        {
+          "name": "delete",
+          "summary": "Delete an environment",
+          "deprecated": { "message": "use `env destroy` instead" },
+          "parameters": [
+            {
+              "role": "positional",
+              "name": "environment",
+              "type": "string",
+              "required": true
+            },
+            {
+              "role": "confirmationSkip",
+              "name": "yes",
+              "shortName": "y",
+              "type": "boolean",
+              "required": false,
+              "summary": "Skip the confirmation prompt"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "name": "status",
+      "path": ["fleet"],
+      "summary": "Fleet-wide status",
+      "parameters": [
+        {
+          "role": "flag",
+          "name": "format",
+          "type": "enum",
+          "required": false,
+          "enumValues": ["json", "text"],
+          "summary": "Output format"
+        }
+      ]
+    }
+  ]
+}

@@ -11,9 +11,19 @@ resolve them from sibling checkouts.
 # From an authored spec (*.clispec.yaml):
 hnl sdkgen cli gh.clispec.yaml --output handl-packages/generated/gh
 
+# From a foreign spec — fig completion spec or cli-schema v1:
+hnl sdkgen cli gh.fig.json --output handl-packages/generated/gh
+hnl sdkgen cli gh.cli-schema.json --output handl-packages/generated/gh
+
 # Or probe a tool's --help directly:
 hnl sdkgen cli gh --output handl-packages/generated/gh
 ```
+
+Foreign spec formats are detected by file name (`*.fig.json`,
+`*.figspec`, `*.cli-schema.json`) or by content markers
+(`schemaVersion`/`cli-schema-version`, a `subcommands` array, fig-shaped
+`options` rows) and lowered into the same spec IR — constructs with no
+IR analog are reported as diagnostics, not errors.
 
 `--config tool.sdkgen.yaml` overlays `rename`/`drop`/`types`/`max_depth`;
 `probe: { flag, max_depth }` in a spec file merges a live `--help` walk

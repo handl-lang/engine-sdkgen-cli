@@ -9,6 +9,8 @@
 //! - [`probe`]/[`help`] — live help capture (fallback `--help` → `-h`
 //!   → `help` → bare) and its pure parser with confidence diagnostics.
 //! - [`config`] — `*.sdkgen.yaml` overrides ([`CliConfig`]).
+//! - [`foreign`] — foreign spec ingestion: fig completion specs and
+//!   cli-schema v1 documents lowered into [`CliSpec`].
 //! - [`map`] — `CliSpec` → `SdkgenModule` (one `Function` per leaf
 //!   command; see the `arg_descriptors` contract there).
 //! - [`emit_hnl`] — `hnl-cli` emitter: `.hnl` port/adapter pair against
@@ -17,6 +19,7 @@
 mod backend;
 mod config;
 mod emit_hnl;
+mod foreign;
 mod help;
 mod map;
 mod probe;
@@ -25,6 +28,7 @@ mod spec;
 pub use backend::CliBackend;
 pub use config::CliConfig;
 pub use emit_hnl::HnlCliEmitter;
+pub use foreign::{ForeignSpec, Format};
 pub use help::{ParsedHelp, ParsedOption, ParsedPositional, parse_help};
 pub use probe::{CommandRunner, ProbePlan, ProbeResult, RunHelp, probe_tool};
 pub use spec::{CliSpec, CommandNode, OptionSpec, PositionalSpec, ProbeSpec};
@@ -72,6 +76,8 @@ fn make_backend(req: &SdkgenRequest<'_>) -> Result<Box<dyn SdkgenBackend>, Strin
 mod config_test;
 #[cfg(test)]
 mod emit_hnl_test;
+#[cfg(test)]
+mod foreign_test;
 #[cfg(test)]
 mod help_test;
 #[cfg(test)]

@@ -1,8 +1,10 @@
 # `*.clispec.yaml` — the authored spec
 
 The `cli` backend's native input is a `*.clispec.yaml` file describing a
-tool's command tree. Anything that is not a `*.yaml`/`*.yml` file is a
-tool name and is probed instead (see [probe.md](./probe.md)).
+tool's command tree. Recognized *foreign* spec formats (see
+[below](#foreign-input-formats)) are lowered into the same IR; anything
+else that is not a spec is a tool name and is probed instead (see
+[probe.md](./probe.md)).
 
 ```yaml
 name: gh                      # required — module name basis + probed argv[0]
@@ -107,3 +109,63 @@ emit_spec: gh.clispec.yaml               # dump resolved tree ("-" = stdout)
 `emit_spec` output is `CliSpec::dump()` — self-contained (no `probe:`),
 re-parses via `CliSpec::load` to the same tree. The pipeline: probe a
 noisy tool, dump the spec, hand-tune, then generate from the spec file.
+
+## Foreign input formats
+
+Two external spec ecosystems ingest directly (`src/foreign.rs`) — the
+result is the same `CliSpec` IR, so `hnl sdkgen cli gh.fig.json …` works
+exactly like the yaml input, and `emit_spec` dumps a canonical
+`.clispec.yaml` of the imported tree.
+
+Detection order:
+
+1. **File name** — `*.fig.json` / `*.figspec` → fig;
+   `*.cli-schema.json` → cli-schema. A claimed name that is missing or
+   malformed is a hard error, never a probe.
+2. **Content markers** — a JSON object with `schemaVersion` or
+   `cli-schema-version` → cli-schema; a `subcommands` array, or an
+   `options` array of fig-shaped rows (`{"name": ["--long", "-s"], …}`)
+   → fig.
+3. Anything else falls through to the probe path (a binary, a bare tool
+   name).
+
+### fig (withfig/autocomplete)
+
+Serialized [fig completion specs](https://github.com/withfig/autocomplete)
+— the de-facto standard, 600+ tools — are `subcommands` / `options` /
+`args` trees.
+
+| fig field | IR mapping |
+| --- | --- |
+| `name` (root, string or `string[]`) | `spec.name` (first element; extras warn) |
+| `description` | `about` |
+| `subcommands[].name` | command key (first of an array; the rest → `[aliases: …]` annotation); duplicate names merge |
+| `options[].name` | the first `--long` spelling is `OptionSpec.flag`; other spellings → `[aliases: …]`; spec key is the flag ident (`--dry-run` → `dry_run`) |
+| `options[].args` | present → `kind: string`; absent → `kind: flag` |
+| `options[].isRepeatable` (`true` or `n > 1`) | `strings` when the option takes a value; `[repeatable]` annotation on a flag |
+| `isRequired`, `isPersistent`, `exclusiveOn`, `dependsOn` | `[required]` / `[persistent]` / `[exclusive with: …]` / `[depends on: …]` doc annotations |
+| `args[]` | `positionals` (in order); `isVariadic` → `rest`; `isOptional`/`default` → annotations |
+| everything else (`suggestions`, `template`, `generators`, `loadSpec`, `generateSpec`, `parserDirectives`, `displayName`, …) | dropped — one warning per node listing the fields |
+
+### cli-schema v1
+
+[cli-schema](https://cli-schema.github.io) is the emerging agent-facing
+JSON schema. `schemaVersion` must be `1` (`"1"` string or
+`cli-schema-version` accepted).
+
+| cli-schema field | IR mapping |
+| --- | --- |
+| `name`, `description` | `spec.name`, `spec.about` (`version` is read but unused) |
+| `globalOptions` | flag parameters propagated into *every* command node (and the root leaf); a command's own spelling wins ties |
+| `rootDefault` | `parameters` → the root node's own options/positionals; `summary`/`notes` → `about` fallback |
+| `namespaces[]` | `segment` → command key; `options` → flags inherited by the whole subtree; `defaultCommand.parameters` → the namespace node's own; `commands`/`namespaces` recurse |
+| `commands[]` | `name` → command key; `path` → namespace-word prefix (`{"name": "delete", "path": ["repo"]}` is `repo delete`) |
+| `parameters[]` | `role` `flag`/`confirmationSkip`/`dryRun` → option (`flag: --{name}`); `positional` → positional or `rest` when `variadic` |
+| `type` | `boolean`→`flag`, `integer`/`number`→`int`, `array`→`strings`, `string`/`enum`→`string` (positionals: `int`/`bool`/`string`) |
+| `required`, `shortName`, `aliases`, `defaultValue`, `enumValues`, `separator`, `elementType`, `hidden`, `deprecated`, `validations`, `repeatable` on a boolean | `[…]` doc annotations |
+| `intent`, `output`, `streaming`, `usage`, `examples`, `environment`, `requiresAuth`, … | dropped — one warning per node listing the fields (`x-*` vendor extensions pass silently) |
+
+Warnings land in `module.diagnostics` prefixed `fig {path}: …` /
+`cli-schema {path}: …`; the lowered spec runs through the same
+`CliSpec::validate` as authored yaml, so an unmappable flag spelling is
+a normal validation error.

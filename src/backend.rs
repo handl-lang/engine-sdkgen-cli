@@ -1,5 +1,7 @@
 //! The `cli` [`SdkgenBackend`]: `*.clispec.yaml` files load directly;
-//! anything else is a tool name (or path) probed via `--help`.
+//! recognized foreign specs (fig, cli-schema — see [`crate::foreign`])
+//! ingest into the same IR; anything else is a tool name (or path)
+//! probed via `--help`.
 //!
 //! A spec file carrying a `probe:` block *also* probes `name` and
 //! overlays the authored `commands` on the discovered tree — authored
@@ -10,6 +12,7 @@ use handl_plugin_sdkgen::{SdkgenBackend, SdkgenError, SdkgenModule};
 use std::path::Path;
 
 use crate::config::CliConfig;
+use crate::foreign::{self, ForeignSpec};
 use crate::map::map_spec;
 use crate::probe::{CommandRunner, ProbePlan, probe_tool};
 use crate::spec::{CliSpec, CommandNode, ProbeSpec};
@@ -49,35 +52,55 @@ impl SdkgenBackend for CliBackend {
                 "cli spec not found: {}",
                 path.display()
             )));
+        } else if foreign::claims_path(path) && !path.is_file() {
+            // A `*.fig.json`/`*.figspec`/`*.cli-schema.json` name that
+            // is not a file is a missing spec, not a probeable tool.
+            return Err(SdkgenError(format!(
+                "cli spec not found: {}",
+                path.display()
+            )));
         } else {
-            let arg = path.to_string_lossy().into_owned();
-            if path.exists() {
-                // An existing non-yaml file is a directory or device —
-                // not a spec and not a runnable tool.
-                if !path.is_file() {
-                    return Err(SdkgenError(format!(
-                        "not a spec or tool: {}",
-                        path.display()
-                    )));
+            // An existing file gets a shot at foreign-spec detection
+            // before it falls back to being probed as a tool.
+            let foreign = if path.is_file() {
+                ForeignSpec::load(path).map_err(SdkgenError)?
+            } else {
+                None
+            };
+            if let Some(foreign) = foreign {
+                diagnostics.extend(foreign.warnings);
+                let target = foreign.spec.name.clone();
+                (foreign.spec, target)
+            } else {
+                let arg = path.to_string_lossy().into_owned();
+                if path.exists() {
+                    // An existing non-yaml file is a directory or device —
+                    // not a spec and not a runnable tool.
+                    if !path.is_file() {
+                        return Err(SdkgenError(format!(
+                            "not a spec or tool: {}",
+                            path.display()
+                        )));
+                    }
+                } else if arg.contains('/') || arg.contains('\\') {
+                    return Err(SdkgenError(format!("tool or spec not found: {arg}")));
                 }
-            } else if arg.contains('/') || arg.contains('\\') {
-                return Err(SdkgenError(format!("tool or spec not found: {arg}")));
+                // Bare tool name (or executable path): probe it. The spec
+                // name is the basename — `probe` is implicit.
+                let name = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&arg)
+                    .to_string();
+                (
+                    CliSpec {
+                        name,
+                        probe: Some(ProbeSpec::default()),
+                        ..Default::default()
+                    },
+                    arg,
+                )
             }
-            // Bare tool name (or executable path): probe it. The spec
-            // name is the basename — `probe` is implicit.
-            let name = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or(&arg)
-                .to_string();
-            (
-                CliSpec {
-                    name,
-                    probe: Some(ProbeSpec::default()),
-                    ..Default::default()
-                },
-                arg,
-            )
         };
 
         // Probe when the spec asks for it (explicit `probe:` or the

@@ -1,0 +1,82 @@
+{
+  "name": "gh",
+  "description": "Work seamlessly with GitHub from the command line",
+  "options": [
+    { "name": ["--help", "-h"], "description": "Show help for command" }
+  ],
+  "subcommands": [
+    {
+      "name": "pr",
+      "description": "Manage pull requests",
+      "subcommands": [
+        {
+          "name": "checkout",
+          "description": "Check out a pull request in git",
+          "args": { "name": "pr", "description": "Number, URL or branch of the PR" },
+          "options": [
+            {
+              "name": ["-b", "--branch"],
+              "description": "Local branch name to use",
+              "args": { "name": "branch" }
+            },
+            {
+              "name": "--detach",
+              "description": "Checkout PR with a detached HEAD",
+              "exclusiveOn": ["--branch"]
+            },
+            {
+              "name": "--recurse-submodules",
+              "description": "Update all submodules after checkout"
+            }
+          ]
+        },
+        {
+          "name": ["list", "ls"],
+          "description": "List pull requests",
+          "options": [
+            {
+              "name": ["-s", "--state"],
+              "description": "Filter by state",
+              "args": {
+                "name": "state",
+                "suggestions": ["open", "closed", "merged", "all"]
+              }
+            },
+            {
+              "name": ["-L", "--limit"],
+              "description": "Maximum number of items to fetch",
+              "args": { "name": "int" }
+            },
+            {
+              "name": "--label",
+              "description": "Filter by label",
+              "isRepeatable": true,
+              "args": { "name": "label" }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repo",
+      "description": "Manage repositories",
+      "subcommands": [
+        {
+          "name": "clone",
+          "description": "Clone a repository locally",
+          "args": [
+            { "name": "repository", "description": "owner/repo or a full URL" },
+            { "name": "directory", "isOptional": true },
+            {
+              "name": "extra-args",
+              "description": "Additional git clone flags",
+              "isVariadic": true,
+              "isOptional": true,
+              "generators": { "template": "filepaths" }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
