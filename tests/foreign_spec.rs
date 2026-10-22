@@ -269,15 +269,9 @@ fn usage_kdl_spec_loads_through_the_backend() {
             "meta:json-capable",
         ]
     );
-    let env_doc = deploy
-        .arg_descriptors
-        .iter()
-        .find(|d| d.contains("--env"));
+    let env_doc = deploy.arg_descriptors.iter().find(|d| d.contains("--env"));
     assert!(env_doc.is_some());
-    assert_eq!(
-        deploy.doc.as_deref(),
-        Some("Deploy a service [aliases: d]")
-    );
+    assert_eq!(deploy.doc.as_deref(), Some("Deploy a service [aliases: d]"));
     let add = m
         .functions
         .iter()

@@ -123,6 +123,27 @@ fn duplicate_subcommand_rows_probe_once() {
 }
 
 #[test]
+fn duplicate_usage_group_names_probe_once() {
+    // `Usage: t {a|a}` records `a` twice (brace-group names push into
+    // `subcommands` without dedup) — the second row hits the `visited`
+    // guard and never re-probes.
+    let root = "Usage: t {a|a}\n";
+    let calls = Mutex::new(0usize);
+    let run = |_: &str, args: &[String]| {
+        *calls.lock().unwrap() += 1;
+        Ok(if args == ["a".to_string(), "--help".to_string()] {
+            "Usage: t a\n".to_string()
+        } else {
+            root.to_string()
+        })
+    };
+    let r = probe_tool("t", &ProbePlan::default(), &run);
+    // Root probe + one `a` probe; the duplicate row is skipped.
+    assert_eq!(*calls.lock().unwrap(), 2);
+    assert!(r.commands.contains_key("a"));
+}
+
+#[test]
 fn about_from_the_table_survives_into_the_probed_node() {
     // The subcommand's own help carries no doc; the parent's table row
     // text fills `about`.

@@ -1477,6 +1477,126 @@ fn usage_spec_round_trips_through_dump() {
     assert_eq!(back, f.spec);
 }
 
+#[test]
+fn usage_long_only_doc_text() {
+    // `long_about` without `about` — the (None, Some) doc_text arm.
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        "bin \"t\"\nlong_about \"Only the long form.\"",
+    )
+    .unwrap();
+    assert_eq!(f.spec.about.as_deref(), Some("Only the long form."));
+    // Same arm on a flag: `long_help` with no `help`.
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        "bin \"t\"\nflag \"--x\" long_help=\"Just long.\"",
+    )
+    .unwrap();
+    assert_eq!(f.spec.root.options["x"].doc.as_deref(), Some("Just long."));
+}
+
+#[test]
+fn usage_flagset_global_flags_reach_subcommands() {
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        r#"bin "t"
+        flagset "g" {
+          flag "--shared" global=#true
+          flag "bare"
+        }
+        cmd "c" {
+          use "g"
+          cmd "sub" {}
+        }"#,
+    )
+    .unwrap();
+    let c = &f.spec.root.commands["c"];
+    assert!(c.options.contains_key("shared"));
+    // The flagset's `global=#true` flag joined the scope's own
+    // globals — `sub` inherits it.
+    assert!(c.commands["sub"].options.contains_key("shared"));
+    // `flag "bare"` inside the flagset has no `-` spelling — dropped.
+    assert!(
+        f.warnings
+            .iter()
+            .any(|w| w.contains("flag with no `-` spelling dropped")),
+        "{:?}",
+        f.warnings
+    );
+}
+
+#[test]
+fn usage_flag_empty_def_token_var_child_and_bare_validate() {
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        r#"bin "t"
+        flag "--x <>"
+        flag "--many" { arg "<v>" var=#true }
+        flag "--n <n>" validate="int(value) > 0""#,
+    )
+    .unwrap();
+    let o = &f.spec.root.options;
+    assert_eq!(o["x"].kind, "flag");
+    // A child `arg` marked `var` makes the flag repeat.
+    assert_eq!(o["many"].kind, "strings");
+    // `validate` without `validate_error` — a bare `validation:` note.
+    assert_eq!(
+        o["n"].doc.as_deref(),
+        Some("[value: n] [validation: int(value) > 0]")
+    );
+    // `<>` strips to an empty name — the token drops with a warning.
+    assert!(
+        f.warnings
+            .iter()
+            .any(|w| w.contains("unrecognized flag def token `<>` dropped")),
+        "{:?}",
+        f.warnings
+    );
+}
+
+#[test]
+fn usage_arg_fallback_names_and_annotations() {
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        r#"bin "t"
+        arg "<>"
+        arg "<a>... <b>"
+        arg "<f>" validate="v" validate_error="bad f" {
+          note "A note."
+          warning "A warning."
+        }
+        arg "<g>" validate="v"
+        arg "<h>" { help_md "Md h."; long_help "Long h." }
+        arg "<z>" required=#false"#,
+    )
+    .unwrap();
+    let root = &f.spec.root;
+    let names: Vec<&str> = root.positionals.iter().map(|p| p.name.as_str()).collect();
+    // `<>` strips to nothing — the unnamed arg falls back to `arg1`;
+    // `<a>...` is variadic but not last — mapped as a plain positional.
+    assert_eq!(names, ["arg1", "a", "b", "f", "g", "h", "z"]);
+    assert_eq!(
+        root.positionals[3].doc.as_deref(),
+        Some("[validation: v (bad f)] [note: A note.] [warning: A warning.]")
+    );
+    assert_eq!(root.positionals[4].doc.as_deref(), Some("[validation: v]"));
+    // `help_md`/`long_help` children carry the doc even though they
+    // are not consumed arg children (they warn).
+    assert_eq!(root.positionals[5].doc.as_deref(), Some("Md h.\n\nLong h."));
+    // `required=#false` annotates `optional`.
+    assert_eq!(root.positionals[6].doc.as_deref(), Some("[optional]"));
+    for needle in [
+        "variadic arg `a` is not last — mapped as a positional",
+        "arg `<h>`: unsupported child nodes dropped: help_md, long_help",
+    ] {
+        assert!(
+            f.warnings.iter().any(|w| w.contains(needle)),
+            "missing `{needle}`: {:?}",
+            f.warnings
+        );
+    }
+}
+
 // ------------------------------------------------------------------
 // kdl lexer edges
 // ------------------------------------------------------------------
@@ -1518,6 +1638,50 @@ fn kdl_entry_edges() {
     assert!(nodes[0].prop("b").is_some());
     assert!(nodes[0].prop("c").is_some());
     assert!(nodes[0].prop("d").is_some());
+}
+
+#[test]
+fn kdl_slashdash_inside_a_child_block() {
+    use super::foreign::kdl;
+    // `/-` inside `{ }` elides the following child node only.
+    let doc = kdl::parse("a { /- gone \"x\"\nkept 1 }").unwrap();
+    let names: Vec<&str> = doc[0].children.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["kept"]);
+    assert_eq!(doc[0].children[0].args, [KdlVal::Num("1".into())]);
+}
+
+#[test]
+fn kdl_newline_inside_a_string_bumps_the_line() {
+    use super::foreign::kdl;
+    // A literal `\n` inside a quoted string advances error line numbers.
+    let err = kdl::parse("n \"a\nb\" }").unwrap_err();
+    assert_eq!(err, "line 2: unmatched `}`");
+}
+
+#[test]
+fn kdl_crlf_after_multiline_and_raw_multiline_openers() {
+    use super::foreign::kdl;
+    // `"""\r\n` — the CRLF after the opener is skipped as a unit.
+    let doc = kdl::parse("n \"\"\"\r\nbody\"\"\"").unwrap();
+    assert_eq!(doc[0].args[0], KdlVal::Str("body".into()));
+    // `#"""\r\n` — the same skip inside a raw multiline string.
+    let doc = kdl::parse("n #\"\"\"\r\nraw\"\"\"#").unwrap();
+    assert_eq!(doc[0].args[0], KdlVal::Str("raw".into()));
+}
+
+#[test]
+fn kdl_raw_string_node_name() {
+    use super::foreign::kdl;
+    // `#"…"#` in name position goes through `hash()` → a raw node name.
+    let doc = kdl::parse("#\"my node\"# \"x\"").unwrap();
+    assert_eq!(doc[0].name, "my node");
+    assert_eq!(doc[0].args, [KdlVal::Str("x".into())]);
+    // A `#keyword` is not a valid node name.
+    assert!(
+        kdl::parse("#true")
+            .unwrap_err()
+            .contains("expected a raw string")
+    );
 }
 
 #[test]

@@ -902,7 +902,7 @@ fn kubectl_global_options_page_parses() {
     // passed to any command:` — the header suffix rule lands it in
     // Options and every row parses (boolean defaults → flag).
     let p = parse_help(&fixture("kubectl-options.txt"), 2);
-    assert!(p.options.len() >= 25, "{}", p.options.len());
+    assert!(p.options.len() >= 25);
     let kinds: BTreeMap<&str, &str> = p
         .options
         .iter()
@@ -931,7 +931,7 @@ fn repeatable_option_rows_infer_strings_kind() {
         p.options
             .iter()
             .find(|o| o.flag == flag)
-            .unwrap_or_else(|| panic!("{flag} missing"))
+            .expect("flag row missing")
             .kind
             .as_str()
     };
