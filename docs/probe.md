@@ -56,10 +56,14 @@ Cobra/clap/getopt/argparse/man-page conventions:
   indented continuation lines repeating the program word are parsed as
   alternate forms; `or:`/`or ` lines ignored. `[-D debugopts]`-style
   option groups are skipped to their `]`; `'…'`/`"…"` quoted option
-  values stay single tokens; parenthesized alternation groups
-  (`(TYPE NAME | -f FILE)`, `[(-o|--output=)json|yaml|…]`) are skipped
-  whole and counted in warnings — their pieces are alternatives, not
-  flattenable positionals. `NAME=VALUE` operands name only their left
+  values stay single tokens. Parenthesized alternation groups
+  (`(TYPE NAME | -f FILE)`) are *modeled*, not skipped: an
+  all-positional alternation emits alternative[0]'s positionals
+  (`(TYPE NAME | TYPE/NAME)` → `type`, `name`); a flag-bearing one
+  flattens to a named variadic `rest` tail with a warning, since no
+  single word covers both shapes. Groups that aren't `|`-alternations
+  (`[(-o|--output=)json|yaml]`, a truncated conjunction) are skipped
+  and counted in warnings. `NAME=VALUE` operands name only their left
   side; punctuation-only tokens never become `''` positionals.
 - Option tables — `Flags:`/`Options:`/`Global Flags:`/`Valid options
   are:`/`Optional arguments`/`Named arguments` headers
@@ -84,8 +88,10 @@ Cobra/clap/getopt/argparse/man-page conventions:
   excepted), or "multiple times"/"(repeatable)"/"comma-separated"
   phrasing in the row's description (`git -C`, `git -L`,
   `kubectl --label` rows all infer this way). A repeatable *no-arg*
-  switch (`-v...`) stays `flag` — it is a count, not a list. When the
-  guess is wrong, `types:` in the config overrides it.
+  switch (`-v...`) stays `flag` — it is a count, not a list. The row's
+  description column becomes the option's `doc` (threaded to the
+  FlagSpec `doc` field and the port's `opts:` table). When the guess
+  is wrong, `types:` in the config overrides it.
 - Command tables — `Commands:`/`Available Commands:`/`The commands
   are:`/`SUBCOMMANDS:` — `name   description` rows (`name:` colons
   trimmed). Unrecognized-header or headerless stretches whose
@@ -117,7 +123,8 @@ to report *how* the scrape went, not to emit a half-empty SDK silently:
 - `row \`<row>\` lists several flag spellings; only \`<f>\` captured` — packed rows like `-D -O -P -debug` lose all but one spelling
 - `N table rows appeared outside a recognized section` / `N flag-like rows appeared outside an options section`
 - `usage group names \`a\`, \`b\` unmatched by any commands table` — `{a|b}` usage groups with no corresponding table rows
-- `usage line carried N parenthesized alternation groups that were skipped` — `(A | B)` groups whose alternatives cannot flatten into positionals (kubectl's `(TYPE NAME | -f FILE)`)
+- `alternation \`(…)\` flattened to a rest/positional argument \`x\`` — a flag-bearing `(A | B)` group (kubectl's `(TYPE NAME | -f FILE)`) had to collapse into the variadic tail
+- `usage line carried N parenthesized alternation groups that were skipped` — `(…)` groups that are not `|`-alternations at all (option-value choices, truncated conjunctions like `[--limits=X & --requests=Y]`)
 
 Per-node confidence (`ParsedHelp::confidence`):
 

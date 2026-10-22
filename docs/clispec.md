@@ -59,7 +59,9 @@ config `max_depth` overrides).
 must start with `-`, must not contain `:` since the IR descriptor is
 colon-separated), `kind` ∈ `flag | string | int | strings` (default
 `flag`; `strings` is repeatable — it emits `flag <v>` once per list
-element). Probed option rows infer `strings` from repeatability
+element), `doc` (one-line description — threads into the emitted
+FlagSpec `doc` field and the port's `opts:` doc table; probed options
+pick it up from the help row's description column). Probed option rows infer `strings` from repeatability
 signals in the help text itself — `...`/`[]`/`[=VAL]` spec markers,
 plural `VALS` metavars, "multiple times"/"(repeatable)"/
 "comma-separated" phrasing — so `git -C`-style repeatable flags map
@@ -120,20 +122,22 @@ to stderr), hand-tune, then generate from the spec file.
 
 ## Foreign input formats
 
-Two external spec ecosystems ingest directly (`src/foreign.rs`) — the
-result is the same `CliSpec` IR, so `hnl sdkgen cli gh.fig.json …` works
-exactly like the yaml input, and `emit_spec` dumps a canonical
-`.clispec.yaml` of the imported tree.
+Three external spec ecosystems ingest directly (`src/foreign/`, one
+file per dialect) — the result is the same `CliSpec` IR, so
+`hnl sdkgen cli gh.fig.json …` works exactly like the yaml input, and
+`emit_spec` dumps a canonical `.clispec.yaml` of the imported tree.
 
 Detection order:
 
 1. **File name** — `*.fig.json` / `*.figspec` → fig;
-   `*.cli-schema.json` → cli-schema. A claimed name that is missing or
-   malformed is a hard error, never a probe.
+   `*.cli-schema.json` → cli-schema; `*.kdl` / `*.usage.kdl` → usage.
+   A claimed name that is missing or malformed is a hard error, never
+   a probe.
 2. **Content markers** — a JSON object with `schemaVersion` or
    `cli-schema-version` → cli-schema; a `subcommands` array, or an
    `options` array of fig-shaped rows (`{"name": ["--long", "-s"], …}`)
-   → fig.
+   → fig; a document that parses as KDL with top-level
+   `cmd`/`flag`/`arg`/`option`/`usage` nodes → usage.
 3. Anything else falls through to the probe path (a binary, a bare tool
    name).
 
@@ -146,7 +150,7 @@ Serialized [fig completion specs](https://github.com/withfig/autocomplete)
 | fig field | IR mapping |
 | --- | --- |
 | `name` (root, string or `string[]`) | `spec.name` (first element; extras warn) |
-| `description` | `about` |
+| `description` | `about` (root) / `doc` (options, args) |
 | `subcommands[].name` | command key (first of an array; the rest → `[aliases: …]` annotation); duplicate names merge |
 | `options[].name` | the first `--long` spelling is `OptionSpec.flag`; other spellings → `[aliases: …]`; spec key is the flag ident (`--dry-run` → `dry_run`) |
 | `options[].args` | present → `kind: string`; absent → `kind: flag` |
@@ -173,7 +177,26 @@ JSON schema. `schemaVersion` must be `1` (`"1"` string or
 | `required`, `shortName`, `aliases`, `defaultValue`, `enumValues`, `separator`, `elementType`, `hidden`, `deprecated`, `validations`, `repeatable` on a boolean | `[…]` doc annotations |
 | `intent`, `output`, `streaming`, `usage`, `examples`, `environment`, `requiresAuth`, … | dropped — one warning per node listing the fields (`x-*` vendor extensions pass silently) |
 
+### usage (KDL)
+
+[usage](https://usage.jdx.dev) specs — KDL documents (`flag "-f
+--force"`, `arg "<file>"`, `cmd "name" { … }`; mise ships one) — read
+by the in-crate KDL subset reader (`src/foreign/kdl.rs`), which also
+accepts the bare-word values real `*.usage.kdl` files use.
+
+| usage construct | IR mapping |
+| --- | --- |
+| `bin` / `name` | `spec.name` (`bin` wins) |
+| `about`/`about_md`/`long_about`, `usage`, top-level `alias` | `spec.about` (+ `[aliases: …]`/`[usage: …]` annotations) |
+| `flag`/`option "…spellings <value>"` | option — first `--long` spelling is `OptionSpec.flag`, the rest `[aliases: …]`; a value token/child `arg` → `string`, `var`/`...` → `strings`, none → `flag` |
+| `arg "<x>"` | `positionals` in order; `...`/`var=#true` on the last → `rest` |
+| `cmd "name" { … }` | command key; `alias`/`help`/`long_help` → `about` + annotations; children recurse |
+| `flagset "n" { … }` + `use "n"` | the set's flags/args spliced into the using scope |
+| `global=#true` on a flag | inherited by the whole subtree (own spelling wins) |
+| `required`, `default`, `env`, `count`, `hide`, `deprecated`, `negate`, `conflicts`, `overrides`, `requires`, `choices`, `delimiter`, `action`, `var_min`/`var_max`, `validate`, `note`/`warning` children | `[…]` doc annotations |
+| `complete`/`mount`/`exec`, `help_template`/`display_order`, `output`/`exit_code`/`config`/`group`/`clause`, unknown nodes/props | dropped — one warning per scope |
+
 Warnings land in `module.diagnostics` prefixed `fig {path}: …` /
-`cli-schema {path}: …`; the lowered spec runs through the same
-`CliSpec::validate` as authored yaml, so an unmappable flag spelling is
-a normal validation error.
+`cli-schema {path}: …` / `usage {path}: …`; the lowered spec runs
+through the same `CliSpec::validate` as authored yaml, so an
+unmappable flag spelling is a normal validation error.
