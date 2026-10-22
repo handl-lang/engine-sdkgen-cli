@@ -1,0 +1,18 @@
+See 'git help <command>' to read about a specific subcommand
+
+Main Porcelain Commands
+   add                     Add file contents to the index
+   checkout                Switch branches or restore working tree files
+
+Ancillary Commands / Interrogators
+   annotate                Annotate file lines with commit information
+   blame                   Show what revision and author last modified each line of a file
+
+User-facing file system, commands and options
+   attributes              Defining attributes per path
+   everyday                A useful minimum set of commands for Everyday Git
+   revisions               Specifying revisions and ranges
+
+Manual topics
+   namespaces              Git namespaces
+   protocol-v2             Protocol v2 specification

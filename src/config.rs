@@ -33,7 +33,8 @@ pub struct CliConfig {
     pub max_depth: Option<usize>,
     /// Write the resolved command tree (post-probe, post-overlay) as a
     /// canonical `.clispec.yaml` to this path — the "probe then
-    /// hand-tune" workflow. `"-"` writes to stdout.
+    /// hand-tune" workflow. `"-"` writes to stdout. The `--emit-spec`
+    /// CLI flag sets this post-load and wins when both are present.
     pub emit_spec: Option<String>,
 }
 

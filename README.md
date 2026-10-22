@@ -17,6 +17,9 @@ hnl sdkgen cli gh.cli-schema.json --output handl-packages/generated/gh
 
 # Or probe a tool's --help directly:
 hnl sdkgen cli gh --output handl-packages/generated/gh
+
+# "Probe then hand-tune": dump the resolved tree as a spec to edit:
+hnl sdkgen cli gh --output handl-packages/generated/gh --emit-spec gh.clispec.yaml
 ```
 
 Foreign spec formats are detected by file name (`*.fig.json`,
@@ -27,8 +30,9 @@ IR analog are reported as diagnostics, not errors.
 
 `--config tool.sdkgen.yaml` overlays `rename`/`drop`/`types`/`max_depth`;
 `probe: { flag, max_depth }` in a spec file merges a live `--help` walk
-with the authored command tree; `emit_spec:` in the config writes the
-resolved tree back out as a `.clispec.yaml` to hand-tune.
+with the authored command tree; `--emit-spec <path>` (or `emit_spec:` in
+the config — the flag wins) writes the resolved tree back out as a
+`.clispec.yaml` to hand-tune, `-` writing it to stdout.
 
 ## Docs
 

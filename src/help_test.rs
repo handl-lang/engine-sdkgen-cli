@@ -29,10 +29,12 @@ fn cobra_style_usage_flags_and_subcommands() {
                 flag: "--draft".into(),
                 kind: "flag".into(),
             },
+            // "can be used multiple times" — the row's own text proves
+            // repeatability, so the kind is `strings`.
             ParsedOption {
                 name: "label".into(),
                 flag: "--label".into(),
-                kind: "string".into(),
+                kind: "strings".into(),
             },
             ParsedOption {
                 name: "jobs".into(),
@@ -591,7 +593,10 @@ fn kubectl_get_alternation_groups_do_not_leak_positionals() {
     assert_eq!(kinds["output"], "string");
     assert_eq!(kinds["selector"], "string");
     assert_eq!(kinds["field_selector"], "string");
-    assert_eq!(kinds["filename"], "string");
+    // kubectl spells StringSlice options `--flag=[]` — a repeatable
+    // option, so the inferred kind is `strings`, not `string`.
+    assert_eq!(kinds["filename"], "strings");
+    assert_eq!(kinds["label_columns"], "strings");
     assert_eq!(kinds["chunk_size"], "int");
     assert_eq!(kinds["watch"], "flag");
     assert_eq!(kinds["all_namespaces"], "flag");
@@ -622,7 +627,7 @@ fn kubectl_set_resources_paren_groups_are_skipped() {
     assert_eq!(kinds["limits"], "string");
     assert_eq!(kinds["requests"], "string");
     assert_eq!(kinds["containers"], "string");
-    assert_eq!(kinds["filename"], "string");
+    assert_eq!(kinds["filename"], "strings");
     assert_eq!(kinds["local"], "flag");
     assert_eq!(kinds["all"], "flag");
     assert!(
@@ -907,7 +912,119 @@ fn kubectl_global_options_page_parses() {
     assert_eq!(kinds["server"], "string");
     assert_eq!(kinds["as"], "string");
     assert_eq!(kinds["warnings_as_errors"], "flag");
+    // `--as-group=[]`/`--as-user-extra=[]` are kubectl StringSlice
+    // options → `strings`.
+    assert_eq!(kinds["as_group"], "strings");
+    assert_eq!(kinds["as_user_extra"], "strings");
     // The standalone options page carries no usage line — that is the
     // only warning.
     assert_eq!(p.warnings, vec!["no usage line found".to_string()]);
+}
+
+#[test]
+fn repeatable_option_rows_infer_strings_kind() {
+    // `git -C`/`git -L`/`kubectl --filename=[]`-style rows: the row's
+    // own spec or description proves repeatability, so the option
+    // repeat-emits `flag <v>` — `strings`, not `string`.
+    let p = parse_help(&fixture("repeatable-flags.txt"), 1);
+    let kind_of = |flag: &str| {
+        p.options
+            .iter()
+            .find(|o| o.flag == flag)
+            .unwrap_or_else(|| panic!("{flag} missing"))
+            .kind
+            .as_str()
+    };
+    // Description phrasing.
+    assert_eq!(kind_of("-C"), "strings"); // "may be given multiple times"
+    assert_eq!(kind_of("-c"), "strings"); // "can be used multiple times"
+    assert_eq!(kind_of("-L"), "strings"); // "may be specified multiple times"
+    assert_eq!(kind_of("--config-env"), "strings"); // "(repeatable)"
+    // Spec markers: plural metavar, `...`, `[]`, `[=VAL]`.
+    assert_eq!(kind_of("--tag"), "strings"); // TAGS
+    assert_eq!(kind_of("--exclude"), "strings"); // PATTERN...
+    assert_eq!(kind_of("--filename"), "strings"); // =[]
+    assert_eq!(kind_of("--exec-path"), "strings"); // [=<path>]
+    // `SECONDS` is a singular `…S` metavar — a plain string.
+    assert_eq!(kind_of("--timeout"), "string");
+    // `--verbose...` takes no value — a counted flag, not a list.
+    assert_eq!(kind_of("--verbose"), "flag");
+    // An ordinary metavar stays `string`.
+    assert_eq!(kind_of("--color"), "string");
+}
+
+#[test]
+fn repeatable_inference_does_not_steal_bool_or_int_rows() {
+    // A boolean metavar stays `flag` even under repeatable phrasing;
+    // an int metavar promoted by repeatability becomes `strings`
+    // (there is no `ints` kind — elements stringify per emission).
+    let text =
+        "Options:\n  --sw=false:   may be used multiple times\n  --n <count>   repeat per shard\n";
+    let p = parse_help(text, 1);
+    let kinds: BTreeMap<&str, &str> = p
+        .options
+        .iter()
+        .map(|o| (o.name.as_str(), o.kind.as_str()))
+        .collect();
+    assert_eq!(kinds["sw"], "flag");
+    assert_eq!(kinds["n"], "strings");
+}
+
+#[test]
+fn promoted_provenance_tracks_loose_blocks_only() {
+    // `git help -a`-shaped page: `Main Porcelain Commands` is a real
+    // commands table; `Ancillary Commands / Interrogators` and `Manual
+    // topics` are loose blocks whose rows promote. The `User-facing
+    // file system, commands and options` head lands in an *options*
+    // section — its rows never become commands at all (and the empty
+    // section warns).
+    let p = parse_help(&fixture("git-help-concepts.txt"), 1);
+    let subs: Vec<&str> = p.subcommands.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        subs,
+        [
+            "add",
+            "checkout",
+            "annotate",
+            "blame",
+            "namespaces",
+            "protocol-v2"
+        ],
+        "{subs:?}"
+    );
+    for topic in ["annotate", "blame", "namespaces", "protocol-v2"] {
+        assert!(p.promoted.contains(topic), "{topic} not marked promoted");
+    }
+    assert!(!p.promoted.contains("add"));
+    assert!(!p.promoted.contains("checkout"));
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("produced no option rows")),
+        "{:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn table_row_for_a_promoted_name_marks_it_table_discovered() {
+    // A loose block promotes `x`; a later `Commands:` table names the
+    // same command — the real table provenance wins and `x` is no
+    // longer marked promoted.
+    let text = "usage: t\n\nsome head\n  x   first\n  y   second\n\nCommands:\n  x   in table\n";
+    let p = parse_help(text, 1);
+    assert!(p.promoted.contains("y"));
+    assert!(!p.promoted.contains("x"));
+}
+
+#[test]
+fn loose_row_for_a_known_name_does_not_mark_promoted() {
+    // `a` came from the usage `{a|b}` group — the loose row only adds
+    // its description; the name keeps its stronger provenance.
+    let text = "usage: t {a|b}\n\nweird head\n  a   does a\n  c   does c\n";
+    let p = parse_help(text, 1);
+    assert!(!p.promoted.contains("a"));
+    assert!(p.promoted.contains("c"));
+    let a = p.subcommands.iter().find(|(n, _)| n == "a").unwrap();
+    assert_eq!(a.1, "does a");
 }

@@ -9,8 +9,9 @@
 //! - [`probe`]/[`help`] — live help capture (fallback `--help` → `-h`
 //!   → `help` → bare) and its pure parser with confidence diagnostics.
 //! - [`config`] — `*.sdkgen.yaml` overrides ([`CliConfig`]).
-//! - [`foreign`] — foreign spec ingestion: fig completion specs and
-//!   cli-schema v1 documents lowered into [`CliSpec`].
+//! - [`foreign`] — foreign spec ingestion: fig completion specs,
+//!   cli-schema v1 documents, and usage (KDL) specs lowered into
+//!   [`CliSpec`].
 //! - [`map`] — `CliSpec` → `SdkgenModule` (one `Function` per leaf
 //!   command; see the `arg_descriptors` contract there).
 //! - [`emit_hnl`] — `hnl-cli` emitter: `.hnl` port/adapter pair against
@@ -62,10 +63,15 @@ pub fn register(reg: &mut SdkgenRegistry) {
 }
 
 fn make_backend(req: &SdkgenRequest<'_>) -> Result<Box<dyn SdkgenBackend>, String> {
-    let config = match req.config {
+    let mut config = match req.config {
         Some(path) => CliConfig::load(path)?,
         None => CliConfig::default(),
     };
+    // `--emit-spec <path|->` is an overlay applied post-config: the
+    // flag wins over a config-file `emit_spec:` key.
+    if let Some(path) = req.emit_spec {
+        config.emit_spec = Some(path.to_string_lossy().into_owned());
+    }
     Ok(Box::new(CliBackend::new(
         req.target.map(str::to_string),
         config,

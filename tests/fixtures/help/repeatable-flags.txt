@@ -1,0 +1,14 @@
+usage: git [--version] [--help] [-C <path>] [-c <name>=<value>] <command> [<args>]
+
+Main options:
+  -C <path>             run as if git was started in <path> (may be given multiple times)
+  -c <name>=<value>     pass a configuration parameter; can be used multiple times
+  -L <n,m:file>         process the given line range; may be specified multiple times
+  --config-env=<n>=<v>  like -c (repeatable)
+  --tag TAGS            use an explicit tag list
+  --exclude PATTERN...  exclude paths matching PATTERN
+  -f, --filename=[]     files identifying the resource to use
+  --exec-path[=<path>]  print or set the path to git-core programs
+  --timeout SECONDS     abort the operation after SECONDS
+  -v, --verbose...      increase verbosity (repeatable, takes no value)
+  --color <WHEN>        when to colorize the output

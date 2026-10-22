@@ -26,6 +26,7 @@ fn request<'a>(spec: &'a Path, output: &'a Path, lang: &'a Language) -> SdkgenRe
         include: None,
         exclude: None,
         config: None,
+        emit_spec: None,
         lang,
     }
 }
@@ -202,4 +203,36 @@ fn emit_spec_flows_through_request_config() {
     let text = std::fs::read_to_string(&emitted).unwrap();
     assert!(text.contains("name: t"), "{text}");
     assert!(text.contains("a:"), "{text}");
+}
+
+#[test]
+fn emit_spec_flag_flows_through_request_and_wins_over_config() {
+    // `req.emit_spec` is the `--emit-spec` argv flag: it dumps the
+    // resolved tree with no config file at all, and beats the
+    // config-file `emit_spec:` key when both are set.
+    let tmp = tempfile::tempdir().unwrap();
+    let spec = tmp.path().join("t.yaml");
+    std::fs::write(&spec, "name: t\ncommands:\n  a: {}\n").unwrap();
+    let emitted = tmp.path().join("t.clispec.yaml");
+    let output = tmp.path().join("out");
+    let lang = lang();
+    let mut req = request(&spec, &output, &lang);
+    req.emit_spec = Some(emitted.as_path());
+    registry().run("cli", &req).unwrap();
+    let text = std::fs::read_to_string(&emitted).unwrap();
+    assert!(text.contains("name: t"), "{text}");
+
+    let cfg = tmp.path().join("t.sdkgen.yaml");
+    let cfg_dest = tmp.path().join("cfg.clispec.yaml");
+    std::fs::write(&cfg, format!("emit_spec: {}\n", cfg_dest.display())).unwrap();
+    let flag_dest = tmp.path().join("flag.clispec.yaml");
+    let mut req = request(&spec, &output, &lang);
+    req.config = Some(cfg.as_path());
+    req.emit_spec = Some(flag_dest.as_path());
+    registry().run("cli", &req).unwrap();
+    assert!(flag_dest.exists());
+    assert!(
+        !cfg_dest.exists(),
+        "config emit_spec should lose to the flag"
+    );
 }

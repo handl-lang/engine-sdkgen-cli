@@ -280,6 +280,85 @@ fn help_candidates_order_and_dedup() {
     assert_eq!(help_candidates("-h"), ["-h", "--help", "help", ""]);
 }
 
+fn fixture(name: &str) -> String {
+    let path = format!("{}/tests/fixtures/help/{name}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read_to_string(path).unwrap()
+}
+
+const LEAF_HELP: &str = "Usage: git x <n>\n\nFlags:\n  -f   force\n";
+
+#[test]
+fn promoted_concept_topics_that_fail_to_probe_are_dropped() {
+    // A `git help -a`-shaped page: `annotate`/`blame` and the concept
+    // topics `namespaces`/`protocol-v2` all arrive via loose-block
+    // promotion, indistinguishable at parse time. The probe separates
+    // them — `git namespaces --help` fails on every candidate because
+    // the name is a `git help <topic>` page, not an argv word — so
+    // promoted children that do not probe are removed; table- and
+    // probe-proven children stay.
+    let root = fixture("git-help-concepts.txt");
+    let run = canned(&[
+        (&["--help"], Ok(root.as_str())),
+        (&["add", "--help"], Ok(LEAF_HELP)),
+        (&["checkout", "--help"], Ok(LEAF_HELP)),
+        (&["annotate", "--help"], Ok(LEAF_HELP)),
+        (&["blame", "--help"], Ok(LEAF_HELP)),
+    ]);
+    let r = probe_tool("git", &ProbePlan::default(), &run);
+    for kept in ["add", "checkout", "annotate", "blame"] {
+        assert!(r.commands.contains_key(kept), "{kept} dropped");
+    }
+    for gone in ["namespaces", "protocol-v2"] {
+        assert!(!r.commands.contains_key(gone), "{gone} survived");
+        assert!(
+            r.diagnostics
+                .iter()
+                .any(|d| d.contains(&format!("dropped `{gone}`"))),
+            "{:?}",
+            r.diagnostics
+        );
+    }
+    // The only remaining diagnostics are the failed topic probes, the
+    // drop notes, and the fake `… and options` section — `medium`
+    // because the page has no usage line.
+    assert_eq!(r.confidence, "medium");
+}
+
+#[test]
+fn dropped_topic_failures_do_not_drag_confidence_down() {
+    // Without the restore, each dropped topic's failed probe would
+    // sink the whole walk to `low` — misreporting a clean page.
+    let root = "Usage: t <cmd>\n\nweird head\n  topic1   guide one\n  topic2   guide two\n";
+    let run = canned(&[(&["--help"], Ok(root))]);
+    let r = probe_tool("t", &ProbePlan::default(), &run);
+    assert!(r.commands.is_empty(), "{:?}", r.commands.keys());
+    assert_eq!(r.confidence, "high", "{:?}", r.diagnostics);
+    assert_eq!(
+        r.diagnostics
+            .iter()
+            .filter(|d| d.contains("dropped `"))
+            .count(),
+        2,
+        "{:?}",
+        r.diagnostics
+    );
+}
+
+#[test]
+fn unprobed_promoted_children_survive_at_max_depth() {
+    // The pruning rule needs a *failed* probe — at the depth cap
+    // children are recorded unprobed and promoted names stay stubs.
+    let root = "Usage: t <cmd>\n\nweird head\n  aa   does a\n  bb   does b\n";
+    let run = canned(&[(&["--help"], Ok(root))]);
+    let plan = ProbePlan {
+        flag: "--help".into(),
+        max_depth: 0,
+    };
+    let r = probe_tool("t", &plan, &run);
+    assert!(r.commands.contains_key("aa"));
+    assert!(r.commands.contains_key("bb"));
+}
+
 #[test]
 fn error_banner_pages_fall_through_to_the_help_candidate() {
     // aws-style: `--help` and `-h` answer a `[ERROR]` banner + usage
@@ -304,14 +383,10 @@ fn error_banner_pages_fall_through_to_the_help_candidate() {
                 "Synopsis\n        aws [options] <command> [parameters]\n\nGlobal Options\n     --debug (boolean)   debug logging\n\nAvailable Services\n     * s3\n     * ec2\n",
             ),
         ),
-        (&["s3", "--help"], Err("no page")),
-        (&["s3", "-h"], Err("no page")),
-        (&["s3", "help"], Err("no page")),
-        (&["s3"], Err("no page")),
-        (&["ec2", "--help"], Err("no page")),
-        (&["ec2", "-h"], Err("no page")),
-        (&["ec2", "help"], Err("no page")),
-        (&["ec2"], Err("no page")),
+        // `* s3`-style bullets promote — a promoted child whose probe
+        // fails would be dropped, so the services need real pages.
+        (&["s3", "--help"], Ok("Usage: aws s3 <cmd>\n")),
+        (&["ec2", "--help"], Ok("Usage: aws ec2 <cmd>\n")),
     ]);
     let r = probe_tool("aws", &ProbePlan::default(), &run);
     assert!(r.commands.contains_key("s3"), "{:?}", r.commands);

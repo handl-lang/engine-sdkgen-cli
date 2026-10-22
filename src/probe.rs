@@ -180,7 +180,10 @@ fn worse(current: &mut String, next: &str) {
 
 /// Fill `node` from `tool [path...] <flag>`, trying each candidate
 /// help flag until one returns parseable text, then recurse into each
-/// discovered subcommand while `depth < max_depth`.
+/// discovered subcommand while `depth < max_depth`. Returns `true`
+/// when the node's own probe produced usable help — `false` on a
+/// total probe failure, which the parent uses to prune children that
+/// were only ever loose-block promotions (see below).
 fn probe_node(
     tool: &str,
     path: &[String],
@@ -191,7 +194,7 @@ fn probe_node(
     node: &mut CommandNode,
     diagnostics: &mut Vec<String>,
     confidence: &mut String,
-) {
+) -> bool {
     let dotted = path.join(".");
     let shown = if dotted.is_empty() {
         tool.to_string()
@@ -221,14 +224,14 @@ fn probe_node(
         }
     }
 
-    let Some((used_flag, parsed)) = parsed else {
+    let Some((used_flag, mut parsed)) = parsed else {
         diagnostics.push(format!(
             "probe `{shown} {flag}` failed: {e}",
             flag = plan.flag,
             e = first_err.unwrap_or_default()
         ));
         worse(confidence, "low");
-        return;
+        return false;
     };
     if used_flag != plan.flag {
         let used = if used_flag.is_empty() {
@@ -267,6 +270,17 @@ fn probe_node(
             doc: None,
         });
     }
+    // Names the loose-block promotion invented (see
+    // [`ParsedHelp::promoted`]) — `git help -a` lists concept topics
+    // (`attributes`, `namespaces`, `protocol-v2`) in sections that are
+    // visually identical to its command lists, so table shape alone
+    // cannot tell them apart. The probe can: `git attributes --help`
+    // fails outright because the topic is a `git help <topic>` page,
+    // not an argv word — a promoted child whose every help candidate
+    // fails is removed from the tree. Table- or usage-discovered
+    // children keep their about-only stub on failure: a real `Commands:`
+    // row is evidence the argv word exists.
+    let promoted = std::mem::take(&mut parsed.promoted);
     for (name, about) in parsed.subcommands {
         let entry = node.commands.entry(name.clone()).or_default();
         if entry.about.is_none() && !about.is_empty() {
@@ -279,7 +293,8 @@ fn probe_node(
             // The visited set guards re-entry — a table that names a
             // command already probed (aliases, `help` loops) is skipped.
             if visited.insert(dotted_child) {
-                probe_node(
+                let before = confidence.clone();
+                let probed = probe_node(
                     tool,
                     &child_path,
                     plan,
@@ -290,7 +305,18 @@ fn probe_node(
                     diagnostics,
                     confidence,
                 );
+                if !probed && promoted.contains(name.as_str()) {
+                    // A concept topic's failed probe must not drag the
+                    // real tree's confidence down — restore the level
+                    // the walk had before probing it.
+                    *confidence = before;
+                    node.commands.remove(name.as_str());
+                    diagnostics.push(format!(
+                        "{shown}: dropped `{name}` — promoted from a loose listing but did not probe (a concept topic, not a subcommand)"
+                    ));
+                }
             }
         }
     }
+    true
 }

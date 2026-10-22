@@ -16,7 +16,17 @@ and parses each page with `parse_help` (`src/help.rs`) into
   help — used \`-h\`` diagnostic records it.
 - A node whose every candidate fails adds `probe \`<tool> <path>
   <flag>\` failed: <err>` to diagnostics and confidence drops to `low` —
-  the walk continues; failures never abort.
+  the walk continues; failures never abort. One refinement: a child the
+  parent discovered *only* through loose-block promotion (see
+  `promoted` below) is **dropped** on a total probe failure — `git
+  help -a` lists `git help <topic>` concept pages (`attributes`,
+  `namespaces`, `protocol-v2`) in sections visually identical to its
+  command lists, and the probe is what separates them from real argv
+  words. A dropped node leaves a `{parent}: dropped \`<name>\` — …`
+  diagnostic, keeps the underlying probe-failure note, and does **not**
+  drag confidence down (its failure is restored out). Table- or
+  usage-discovered children keep their about-only stub on failure —
+  a real `Commands:` row is evidence the word exists.
 - Discovered subcommands recurse while `depth < max_depth`
   (default 1 — top-level only). A visited-set keyed by dotted path
   guards re-entry (aliases, `help` loops); already-probed names are
@@ -65,8 +75,17 @@ Cobra/clap/getopt/argparse/man-page conventions:
   command would otherwise grow a `help` option). Metavars
   `int|integer|count|number|num|n|jobs|depth|level` or all-digit →
   `int` kind, `true|false|boolean|bool` → `flag`, other metavars →
-  `string`, none → `flag`. Probed options never get `strings` —
-  repeatability is a spec-only refinement.
+  `string`, none → `flag`. A **value-taking** option whose row proves
+  repeatability infers `strings` (repeat-emits `flag <v>` per
+  element) instead of `string`/`int`: a `...`/`[]`/`[=VAL]` marker in
+  the flag spec (`--verbose...`, kubectl's `--filename=[]`,
+  `--tag[=VAL]`), a plural all-caps metavar (`VALS`, `TAGS`,
+  `FILES` — singular lookalikes like `SECONDS`/`STATUS` are
+  excepted), or "multiple times"/"(repeatable)"/"comma-separated"
+  phrasing in the row's description (`git -C`, `git -L`,
+  `kubectl --label` rows all infer this way). A repeatable *no-arg*
+  switch (`-v...`) stays `flag` — it is a count, not a list. When the
+  guess is wrong, `types:` in the config overrides it.
 - Command tables — `Commands:`/`Available Commands:`/`The commands
   are:`/`SUBCOMMANDS:` — `name   description` rows (`name:` colons
   trimmed). Unrecognized-header or headerless stretches whose
@@ -76,7 +95,10 @@ Cobra/clap/getopt/argparse/man-page conventions:
   groups (`start a working area (see also: …)`, `Ancillary Commands /
   Manipulators`) and aws's `* <service>` bullets under `Available
   Services`. Table rows fill descriptions onto `{a|b}`-discovered
-  names instead of duplicating them.
+  names instead of duplicating them. Names promoted this way are
+  recorded in `ParsedHelp.promoted` — the weaker provenance the
+  probe's concept-topic pruning relies on (a later real `Commands:`
+  row for the same name un-marks it).
 - Positional tables — `positional arguments:`/`Arguments:`/`Args:` —
   row descriptions annotate usage-line positionals; `{a|b}` group rows
   describe usage-group subcommands.

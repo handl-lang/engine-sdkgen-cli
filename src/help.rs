@@ -19,7 +19,12 @@
 //!   single-dash longs (`-cipher`, `-version`). kubectl's
 //!   `--flag=<default>:` rows and man pages' `--flag (boolean)` both
 //!   parse; boolean-ish metavars (`=false`, `(boolean)`) mean `flag`
-//!   kind, not `string`. Blank lines do not close a table while the
+//!   kind, not `string`. Repeatable value-taking options — `...` or
+//!   `[]`/`[=VAL]` markers in the spec, a plural `VALS` metavar, or
+//!   "multiple times"/"(repeatable)"/"comma-separated" phrasing in the
+//!   row — infer `strings` (repeat-emits `flag <v>` per element); a
+//!   repeatable no-arg switch (`-v...`) stays `flag`. Blank lines do
+//!   not close a table while the
 //!   following row stays indented — kubectl and groff separate every
 //!   row with a blank plus a description paragraph.
 //! - `Commands:`/`Available Commands:`/`The commands are:`/
@@ -58,7 +63,7 @@ pub struct ParsedOption {
     pub name: String,
     /// The flag spelling handed back to the tool.
     pub flag: String,
-    /// `flag` | `string` | `int`.
+    /// `flag` | `string` | `int` | `strings` (repeatable).
     pub kind: String,
 }
 
@@ -73,6 +78,14 @@ pub struct ParsedHelp {
     pub options: Vec<ParsedOption>,
     /// `(name, about)` rows — from tables and usage `{a,b}` groups.
     pub subcommands: Vec<(String, String)>,
+    /// Subcommand names that entered `subcommands` only via loose-block
+    /// promotion (an unrecognized header or headerless stretch), never
+    /// via a recognized commands table or a usage `{a|b}` group. `git
+    /// help -a`'s concept-topic sections look exactly like command
+    /// lists, and the probe uses this set to prune rows that fail to
+    /// probe outright — `git attributes --help` errors because
+    /// `attributes` is a `git help <topic>` page, not an argv word.
+    pub promoted: HashSet<String>,
     /// Whether a `Usage:` line was seen at all.
     pub has_usage: bool,
     /// Non-fatal parse diagnostics — table-shaped text that did not
@@ -336,6 +349,10 @@ pub fn parse_help(text: &str, prog_words: usize) -> ParsedHelp {
             },
             Section::Commands => {
                 if let Some((name, desc)) = parse_command_row(trimmed) {
+                    // A recognized table row outranks loose promotion —
+                    // a name both sources produced is treated as
+                    // table-discovered, never pruned by the probe.
+                    out.promoted.remove(&name);
                     push_subcommand(&mut out, &mut table_subs, name, desc);
                 }
             }
@@ -476,6 +493,12 @@ fn flush_loose(
 ) {
     if cmds.len() >= 2 && cmds.len() * 2 >= *rows {
         for (name, desc) in cmds.drain(..) {
+            // A name a commands table or usage `{a|b}` group already
+            // recorded keeps its stronger provenance — only rows the
+            // loose block invented are marked `promoted`.
+            if !out.subcommands.iter().any(|(n, _)| *n == name) {
+                out.promoted.insert(name.clone());
+            }
             push_subcommand(out, table_subs, name, desc);
         }
     } else if let Some(h) = named.take() {
@@ -759,10 +782,12 @@ fn parse_option_row(trimmed: &str) -> Option<(ParsedOption, usize)> {
         return None;
     }
     // The description column is separated from the flag spec by a run
-    // of two or more spaces; a row without one is flag-spec only.
-    let spec = match split_columns(trimmed) {
-        Some((spec, _desc)) => spec,
-        None => trimmed,
+    // of two or more spaces; a row without one is flag-spec only. The
+    // description is kept — "can be used multiple times"-style phrasing
+    // is a `strings` kind signal.
+    let (spec, desc) = match split_columns(trimmed) {
+        Some((spec, desc)) => (spec, desc),
+        None => (trimmed, ""),
     };
     let mut flags: Vec<String> = Vec::new();
     let mut metavar: Option<String> = None;
@@ -813,9 +838,20 @@ fn parse_option_row(trimmed: &str) -> Option<(ParsedOption, usize)> {
     } else {
         flags.len() - 1
     };
+    // Repeatability — `strings` emits `flag <v>` once per element —
+    // reads from three signals: the spec column (`--verbose...`,
+    // `--filename=[]`, `--tag[=VAL]`, a plural `VALS` metavar), the
+    // metavar itself, and the row's own description ("can be used
+    // multiple times", "(repeatable)", "comma-separated"). Only
+    // value-taking options promote: a repeatable no-arg switch
+    // (`-v...`) is a counted flag, not a list.
+    let repeatable = spec_is_repeatable(spec)
+        || metavar.as_deref().is_some_and(is_list_metavar)
+        || desc_is_repeatable(desc);
     let kind = match &metavar {
         None => "flag",
         Some(m) if is_bool_metavar(m) => "flag",
+        Some(_) if repeatable => "strings",
         Some(m) if is_int_metavar(m) => "int",
         Some(_) => "string",
     };
@@ -847,6 +883,56 @@ fn split_columns(line: &str) -> Option<(&str, &str)> {
         i += 1;
     }
     None
+}
+
+/// Repeatability markers in the flag-spec column: a `...` ellipsis on
+/// the spelling or metavar (`--verbose...`, `--exclude PATTERN...`), an
+/// empty list bracket (kubectl spells StringSlice options
+/// `--filename=[]`), or a bracketed `=metavar` tail (`--tag[=VAL]`). A
+/// `[=(a|b)]` choice group is an optional-value annotation, not a
+/// list — git's `--track[=(direct|inherit)]` stays `string`.
+fn spec_is_repeatable(spec: &str) -> bool {
+    spec.contains("...")
+        || spec.contains("[]")
+        || spec
+            .split_once("[=")
+            .is_some_and(|(_, tail)| !tail.starts_with('('))
+}
+
+/// A metavar that reads as a plural — all-caps `VALS`, `TAGS`,
+/// `FILES` — hints at a repeatable option. Singular-looking `…S` words
+/// (units like `SECONDS`, `STATUS`, `CLASS`) are the exception list:
+/// `--timeout SECONDS` is not a repeatable option.
+fn is_list_metavar(m: &str) -> bool {
+    let m = m.trim_matches(|c| "<>[]{}()'\":".contains(c));
+    m.len() >= 3
+        && m.ends_with('S')
+        && m.chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_' || c == '-')
+        && !SINGULAR_S_WORDS.contains(&m.to_ascii_lowercase().as_str())
+}
+
+/// Plural-looking metavar words that are actually singular.
+const SINGULAR_S_WORDS: &[&str] = &[
+    "seconds", "minutes", "hours", "days", "weeks", "months", "years", "status", "class", "bytes",
+    "dns", "os", "ms", "ns", "us", "tls", "as", "is",
+];
+
+/// Repeatability phrases in an option row's description column —
+/// clap's `(repeatable)`, git's "may be specified multiple times",
+/// kubectl's "comma separated list", "can be used multiple times".
+fn desc_is_repeatable(desc: &str) -> bool {
+    let d = desc.to_lowercase();
+    [
+        "repeat",
+        "multiple",
+        "comma-separated",
+        "comma separated",
+        "more than once",
+        "each occurrence",
+    ]
+    .iter()
+    .any(|phrase| d.contains(phrase))
 }
 
 /// Boolean-ish metavars — kubectl documents flag defaults as
