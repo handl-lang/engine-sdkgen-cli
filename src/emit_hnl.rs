@@ -239,7 +239,14 @@ pub(crate) fn build_adapter(module: &SdkgenModule, lib: &str, adapter_pkg: &str)
             .collect::<Vec<_>>()
             .join(", ");
         if f.arg_descriptors.iter().any(|d| d == "meta:json-capable") {
-            out.push_str("--- json-capable\n");
+            // No `x.json()` helper is emitted — the recipe is free pure
+            // arrows the caller composes (composable, treeshakeable,
+            // `~>`-marked). The doc comment points at it.
+            out.push_str(
+                "--- json-capable: stdout under `--json` is JSON — parse with\n\
+                 --- lib-json's `parse` (`from \"json\" import { parse }`), composed\n\
+                 --- free: `parse(tag.untag(r).value.stdout)`.\n",
+            );
         }
         out.push_str(&format!(
             "export {}: {} := ({}) ~> do {{\n",

@@ -32,7 +32,12 @@ descriptors alone.
 
 `meta:json-capable` is stamped when the command offers a `--json`/
 `--format`/`--output`/`-o` flag (option name or spelling) — consumers
-know a machine-readable mode exists.
+know a machine-readable mode exists. The emitter surfaces it as a doc
+comment on the adapter binding suggesting the **free-function
+composition** — `parse(tag.untag(r).value.stdout)` with `parse` from
+lib-json (`from "json" import { parse }`) — not a helper. `x.json()`-
+style method adapters were rejected: not composable, not treeshakeable,
+and they would hide the pure `~>` boundary.
 
 `return_port` is `Output`, `ret_descriptor` `"cli"`, `out_struct` unset.
 
@@ -76,7 +81,9 @@ from "../gh/gh" import { GhPrCreate, GhPrList }
 
 gh_pr_create_flags := [{ name: "draft", flag: "--draft", kind: "flag" }, …]
 
---- json-capable                -- when meta:json-capable was stamped
+--- json-capable: stdout under `--json` is JSON — parse with
+--- lib-json's `parse` (`from "json" import { parse }`), composed
+--- free: `parse(tag.untag(r).value.stdout)`.
 export gh_pr_create: GhPrCreate := (branch, opts, extras) ~> do {
   run(argv("gh", ["pr", "create"], [branch], gh_pr_create_flags, opts, extras))
 }

@@ -213,12 +213,15 @@ fn adapter_marks_json_capable_commands() {
         .arg_descriptors
         .push("meta:json-capable".to_string());
     let adapter = build_adapter(&module, "gh", "gh-cli-host");
+    // Exactly one marker — it lands on `gh_pr_create`, not `gh_pr_list`,
+    // and it points at the free-function composition, not a helper.
+    assert_eq!(adapter.matches("--- json-capable").count(), 1, "{adapter}");
+    let mark = adapter.find("--- json-capable").unwrap();
+    let create = adapter.find("export gh_pr_create").unwrap();
+    assert!(mark < create, "{adapter}");
     assert!(
-        adapter.contains("--- json-capable\nexport gh_pr_create"),
+        adapter.contains("parse(tag.untag(r).value.stdout)"),
         "{adapter}"
     );
-    assert!(
-        !adapter.contains("--- json-capable\nexport gh_pr_list"),
-        "{adapter}"
-    );
+    assert!(adapter.contains("lib-json"), "{adapter}");
 }
