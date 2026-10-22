@@ -764,9 +764,10 @@ fn cli_schema_annotations_and_dropped_fields() {
     );
     assert!(f.spec.root.commands["noise"].about.is_none());
     assert!(
-        f.warnings.iter().any(|w| w.contains(
-            "unsupported command `nuke` fields dropped: output, streaming, usage"
-        )),
+        f.warnings
+            .iter()
+            .any(|w| w
+                .contains("unsupported command `nuke` fields dropped: output, streaming, usage")),
         "{:?}",
         f.warnings
     );

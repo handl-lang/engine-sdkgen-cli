@@ -829,11 +829,7 @@ fn parse_usage(
 /// or, when `rest` is already taken, falls back to an ordinary
 /// positional (two `x...` tails cannot both hold the argv tail;
 /// keeping the name as a plain positional is the least-wrong shape).
-fn emit_positional(
-    out: &mut ParsedHelp,
-    seen: &mut HashSet<String>,
-    mut pos: ParsedPositional,
-) {
+fn emit_positional(out: &mut ParsedHelp, seen: &mut HashSet<String>, mut pos: ParsedPositional) {
     if pos.variadic && out.rest.is_none() {
         out.rest = Some(pos);
     } else {
@@ -858,11 +854,7 @@ fn alt_flag_like(tok: &str) -> bool {
 /// return `None`.
 fn positional_name(tok: &str) -> Option<String> {
     let inner = tok.trim_matches(|c| "[](){}<>.".contains(c));
-    if inner.is_empty()
-        || inner.contains('|')
-        || inner.contains(',')
-        || inner.starts_with('-')
-    {
+    if inner.is_empty() || inner.contains('|') || inner.contains(',') || inner.starts_with('-') {
         return None;
     }
     let inner = inner.split('=').next().unwrap_or(inner);
@@ -888,7 +880,11 @@ fn split_alternatives(group: &[String]) -> Vec<Vec<String>> {
         } else {
             tok.as_str()
         };
-        let t = if i == last { t.trim_end_matches(')') } else { t };
+        let t = if i == last {
+            t.trim_end_matches(')')
+        } else {
+            t
+        };
         if t.is_empty() {
             continue;
         }

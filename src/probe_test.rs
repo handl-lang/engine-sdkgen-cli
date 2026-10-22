@@ -360,9 +360,7 @@ fn promoted_rows_under_unknown_headers_are_pruned_when_probe_fails() {
     assert!(r.commands.contains_key("listed"), "{:?}", r.commands);
     assert!(!r.commands.contains_key("fake"), "{:?}", r.commands);
     assert!(
-        r.diagnostics
-            .iter()
-            .any(|d| d.contains("dropped `fake`")),
+        r.diagnostics.iter().any(|d| d.contains("dropped `fake`")),
         "{:?}",
         r.diagnostics
     );

@@ -75,9 +75,7 @@ fn fig_spec_loads_through_the_backend() {
     // The `generators` field on the variadic arg degrades to a
     // `generator:` doc annotation — nothing drops with a warning.
     assert!(
-        !m.diagnostics
-            .iter()
-            .any(|d| d.contains("generators")),
+        !m.diagnostics.iter().any(|d| d.contains("generators")),
         "{:?}",
         m.diagnostics
     );
