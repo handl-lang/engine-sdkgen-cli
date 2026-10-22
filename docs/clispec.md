@@ -58,7 +58,13 @@ config `max_depth` overrides).
 `OptionSpec`: `flag` (required spelling handed back to the tool —
 must start with `-`, must not contain `:` since the IR descriptor is
 colon-separated), `kind` ∈ `flag | string | int | strings` (default
-`flag`; `strings` is repeatable), `doc`.
+`flag`; `strings` is repeatable — it emits `flag <v>` once per list
+element). Probed option rows infer `strings` from repeatability
+signals in the help text itself — `...`/`[]`/`[=VAL]` spec markers,
+plural `VALS` metavars, "multiple times"/"(repeatable)"/
+"comma-separated" phrasing — so `git -C`-style repeatable flags map
+`strings` without a `types:` override (see
+[probe.md](./probe.md) for the full signal list).
 
 `PositionalSpec`: `name`, `kind` ∈ `string | int | bool` (default
 `string`), `doc`. Positionals map to port args `String`/`Int`/`Bool`;
@@ -104,11 +110,13 @@ emit_spec: gh.clispec.yaml               # dump resolved tree ("-" = stdout)
 | `drop` | list of paths | Remove command subtrees entirely |
 | `types` | map `path.arg → kind` | Override an option kind (`flag`/`string`/`int`/`strings`) or positional/rest kind (`string`/`int`/`bool`) |
 | `max_depth` | int | Probe recursion cap; wins over `probe.max_depth` |
-| `emit_spec` | path or `-` | Write the resolved tree (post-probe, post-overlay) as canonical `.clispec.yaml` — the "probe then hand-tune" workflow |
+| `emit_spec` | path or `-` | Write the resolved tree (post-probe, post-overlay) as canonical `.clispec.yaml` — the "probe then hand-tune" workflow. The `--emit-spec <path>` CLI flag sets the same value and wins when both are present |
 
 `emit_spec` output is `CliSpec::dump()` — self-contained (no `probe:`),
 re-parses via `CliSpec::load` to the same tree. The pipeline: probe a
-noisy tool, dump the spec, hand-tune, then generate from the spec file.
+noisy tool, dump the spec (`--emit-spec out.clispec.yaml`, or `-` for
+stdout — the dump is the only thing printed to stdout; diagnostics go
+to stderr), hand-tune, then generate from the spec file.
 
 ## Foreign input formats
 

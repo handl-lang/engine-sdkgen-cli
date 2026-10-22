@@ -937,3 +937,592 @@ fn format_labels() {
     assert_eq!(Format::Fig.label(), "fig");
     assert_eq!(Format::CliSchema.label(), "cli-schema");
 }
+
+// ------------------------------------------------------------------
+// usage (KDL) detection
+// ------------------------------------------------------------------
+
+#[test]
+fn detect_usage_by_file_name() {
+    for name in ["mise.usage.kdl", "tool.kdl"] {
+        assert_eq!(
+            ForeignSpec::detect(Path::new(name), "garbage {{{"),
+            Some(Format::Usage),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn detect_usage_by_content() {
+    let p = Path::new("tool.txt");
+    for src in [
+        "flag \"-f --force\" help=\"Force\"",
+        "cmd \"run\" { arg \"<x>\" }",
+        "arg \"<file>\"",
+        "option \"--opt <v>\"",
+        "usage \"tool [OPTIONS]\"",
+        "// a comment\nname mycli\nflag \"--x\"",
+    ] {
+        assert_eq!(ForeignSpec::detect(p, src), Some(Format::Usage), "{src}");
+    }
+    // KDL that carries no usage markers is not a spec; nor is KDL
+    // that fails to parse, nor yaml-flavored text.
+    for src in [
+        "name mycli\nbin mycli",
+        "name: mycli\ncommands:",
+        "flag \"unterminated",
+        "config { key value }",
+    ] {
+        assert_eq!(ForeignSpec::detect(p, src), None, "{src}");
+    }
+}
+
+// ------------------------------------------------------------------
+// usage (KDL) parsing — the grammar subset
+// ------------------------------------------------------------------
+
+use super::foreign::kdl::{self, KdlVal};
+
+fn kdl(src: &str) -> Vec<kdl::KdlNode> {
+    kdl::parse(src).unwrap()
+}
+
+#[test]
+fn kdl_nodes_props_and_children() {
+    let doc = kdl(r#"cmd "run" count=3 on=#true {
+          flag "-v" ;
+          arg "<x>"
+        }"#);
+    let run = &doc[0];
+    assert_eq!(run.name, "cmd");
+    assert_eq!(run.args, [KdlVal::Str("run".into())]);
+    assert_eq!(run.prop("count"), Some(&KdlVal::Num("3".into())));
+    assert_eq!(run.prop("on"), Some(&KdlVal::Bool(true)));
+    assert_eq!(run.prop("missing"), None);
+    assert_eq!(run.arg_str(0), Some("run"));
+    assert_eq!(run.arg_str(3), None);
+    let names: Vec<&str> = run.children.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["flag", "arg"]);
+    let mut flags = run.children_named("flag");
+    assert_eq!(flags.next().unwrap().arg_str(0), Some("-v"));
+    assert!(flags.next().is_none());
+    assert!(run.children_named("cmd").next().is_none());
+}
+
+#[test]
+fn kdl_values() {
+    let doc = kdl(
+        "n 1 -2 +3 1.5 bare true false null #true #false #null #inf #-inf #nan a=b c = \"quoted\"",
+    );
+    let n = &doc[0];
+    assert_eq!(
+        n.args,
+        [
+            KdlVal::Num("1".into()),
+            KdlVal::Num("-2".into()),
+            KdlVal::Num("+3".into()),
+            KdlVal::Num("1.5".into()),
+            KdlVal::Str("bare".into()),
+            KdlVal::Bool(true),
+            KdlVal::Bool(false),
+            KdlVal::Null,
+            KdlVal::Bool(true),
+            KdlVal::Bool(false),
+            KdlVal::Null,
+            KdlVal::Num("inf".into()),
+            KdlVal::Num("-inf".into()),
+            KdlVal::Num("nan".into()),
+        ]
+    );
+    assert_eq!(n.prop("a"), Some(&KdlVal::Str("b".into())));
+    assert_eq!(n.prop("c"), Some(&KdlVal::Str("quoted".into())));
+}
+
+#[test]
+fn kdl_strings() {
+    let doc = kdl(r#"n "a\nb\t\"q\"\\\/\s\u{41}""#);
+    assert_eq!(doc[0].args[0], KdlVal::Str("a\nb\t\"q\"\\/ A".into()));
+    // A `\` + newline folds inside a string; spaces after the
+    // newline are content.
+    let doc = kdl("n \"a\\\n  b\"");
+    assert_eq!(doc[0].args[0], KdlVal::Str("a  b".into()));
+}
+
+#[test]
+fn kdl_raw_and_multiline_strings() {
+    let doc = kdl("n #\"a \\\" b\"#\nm ##\"x \"y\"\"##");
+    assert_eq!(doc[0].args[0], KdlVal::Str("a \\\" b".into()));
+    assert_eq!(doc[1].args[0], KdlVal::Str("x \"y\"".into()));
+    // Multiline `"""` drops the opening newline and reads to `"""`.
+    let doc = kdl("n \"\"\"\nline1\nline2\n\"\"\"");
+    assert_eq!(doc[0].args[0], KdlVal::Str("line1\nline2\n".into()));
+    // Raw multiline closes on `"""` + the opening hash count.
+    let doc = kdl("a #\"\"\"\nx \"\"\" y\n\"\"\"#");
+    assert_eq!(doc[0].args[0], KdlVal::Str("x \"\"\" y\n".into()));
+}
+
+#[test]
+fn kdl_comments_and_elision() {
+    let doc = kdl(
+        "// line comment\na 1 /* block /* nested */ still */ b=2\n/- gone \"x\"\nc /- 3 4\n/-d 5\ne /- { f } g=1",
+    );
+    assert_eq!(doc[0].args, [KdlVal::Num("1".into())]);
+    assert_eq!(doc[0].prop("b"), Some(&KdlVal::Num("2".into())));
+    // `gone` is elided; `c` keeps only arg `4` (the `/- 3` entry is out).
+    assert_eq!(doc[1].name, "c");
+    assert_eq!(doc[1].args, [KdlVal::Num("4".into())]);
+    // `/-d` elides node `d`; `e`'s `/- { … }` elides the child block.
+    assert_eq!(doc[2].name, "e");
+    assert!(doc[2].children.is_empty());
+    assert_eq!(doc[2].prop("g"), Some(&KdlVal::Num("1".into())));
+}
+
+#[test]
+fn kdl_continuations_terminators_and_types() {
+    // `\` continues a node across lines; `;` ends one mid-line.
+    let doc = kdl("a \\\n  \"x\" y=1; b 2\n(c)d (t)\"e\" (u)v=3");
+    assert_eq!(doc[0].args, [KdlVal::Str("x".into())]);
+    assert_eq!(doc[0].prop("y"), Some(&KdlVal::Num("1".into())));
+    assert_eq!(doc[1].args, [KdlVal::Num("2".into())]);
+    assert_eq!(doc[2].name, "d");
+    assert_eq!(doc[2].args, [KdlVal::Str("e".into())]);
+    assert_eq!(doc[2].prop("v"), Some(&KdlVal::Num("3".into())));
+    // A quoted node name is legal.
+    let doc = kdl("\"my node\" \"x\"");
+    assert_eq!(doc[0].name, "my node");
+}
+
+#[test]
+fn kdl_errors() {
+    for (src, needle) in [
+        ("}", "unmatched `}`"),
+        ("a {", "unterminated `{` block"),
+        ("a \"x", "unterminated string"),
+        ("a \"\\q\"", "unknown escape `\\q`"),
+        ("a \"x\\", "unterminated string"),
+        ("a \"x\\ y\"", "expected a newline after `\\`"),
+        ("a \"\\u0041\"", "expected `{` after `\\u`"),
+        ("a \"\\u{110000}\"", "bad \\u{…} escape"),
+        ("a \"\\u{41", "unterminated \\u{…} escape"),
+        ("a #\"x", "unterminated raw string"),
+        ("a #\"\"\"x", "unterminated raw string"),
+        ("a #bogus", "unknown keyword `#bogus`"),
+        ("a /* x", "unterminated `/*` comment"),
+        ("a \\ ", "expected a newline after `\\`"),
+        ("a (t", "unterminated `(type)` annotation"),
+        ("a k=", "expected a value"),
+        ("=x", "expected a node name"),
+    ] {
+        let e = kdl::parse(src).unwrap_err();
+        assert!(e.contains(needle), "{src:?}: {e}");
+    }
+}
+
+#[test]
+fn kdl_value_helpers() {
+    assert_eq!(KdlVal::Str("s".into()).as_str(), Some("s"));
+    assert_eq!(KdlVal::Bool(true).as_str(), None);
+    assert!(KdlVal::Bool(true).truthy());
+    assert!(!KdlVal::Str("true".into()).truthy());
+    assert_eq!(KdlVal::Str("s".into()).render(), Some("s".into()));
+    assert_eq!(KdlVal::Num("3".into()).render(), Some("3".into()));
+    assert_eq!(KdlVal::Bool(false).render(), Some("false".into()));
+    assert_eq!(KdlVal::Null.render(), None);
+}
+
+// ------------------------------------------------------------------
+// usage (KDL) mapping
+// ------------------------------------------------------------------
+
+#[test]
+fn usage_maps_a_command_tree() {
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        r#"name "My CLI"
+        bin "mycli"
+        alias "m"
+        about "Process files"
+        long_about "Longer docs."
+        usage "mycli [OPTIONS] <COMMAND>"
+        flag "-v --verbose" help="Verbose" global=#true
+        flag "-u --user <user>" help="Run as user"
+        arg "<dir>" help="Working dir"
+        cmd "config" help="Manage config" {
+          alias "cfg" "conf"
+          cmd "add" help="Add an entry" {
+            arg "<key>"
+            flag "--force" help="Overwrite"
+          }
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(f.format, Format::Usage);
+    let spec = &f.spec;
+    assert_eq!(spec.name, "mycli");
+    // `about` + `long_about` combine; root `alias` and the `usage`
+    // synopsis annotate the module doc.
+    assert_eq!(
+        spec.about.as_deref(),
+        Some("Process files\n\nLonger docs. [aliases: m] [usage: mycli [OPTIONS] <COMMAND>]")
+    );
+    let verbose = &spec.root.options["verbose"];
+    assert_eq!(verbose.flag, "--verbose");
+    assert_eq!(verbose.kind, "flag");
+    assert_eq!(verbose.doc.as_deref(), Some("Verbose [aliases: -v]"));
+    let user = &spec.root.options["user"];
+    assert_eq!(user.kind, "string");
+    assert_eq!(
+        user.doc.as_deref(),
+        Some("Run as user [aliases: -u] [value: user]")
+    );
+    assert_eq!(spec.root.positionals[0].name, "dir");
+    let config = &spec.root.commands["config"];
+    assert_eq!(
+        config.about.as_deref(),
+        Some("Manage config [aliases: cfg, conf]")
+    );
+    // The global `--verbose` lands on every command; `--user` does not.
+    let add = &config.commands["add"];
+    assert!(add.options.contains_key("verbose"));
+    assert!(!add.options.contains_key("user"));
+    assert_eq!(add.positionals[0].name, "key");
+    assert_eq!(add.options["force"].doc.as_deref(), Some("Overwrite"));
+}
+
+#[test]
+fn usage_flag_shapes() {
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        r#"bin "t"
+        flag "--tag <t>" var=#true
+        flag "--inc... <p>"
+        flag "--x" var=#true
+        flag "-v --verbose" count=#true
+        flag "--user" { alias "-u" "-U"; arg "<user>" }
+        flag "--range <start> <end>"
+        flag "bare"
+        flag 42
+        option "--opt <v>" value_optional=#true"#,
+    )
+    .unwrap();
+    let o = &f.spec.root.options;
+    assert_eq!(o["tag"].kind, "strings");
+    assert_eq!(o["inc"].kind, "strings");
+    assert_eq!(o["x"].kind, "flag");
+    assert_eq!(o["x"].doc.as_deref(), Some("[repeatable]"));
+    assert_eq!(o["verbose"].doc.as_deref(), Some("[aliases: -v] [count]"));
+    let user = &o["user"];
+    assert_eq!(user.kind, "string");
+    assert_eq!(user.doc.as_deref(), Some("[aliases: -u, -U] [value: user]"));
+    assert_eq!(o["range"].kind, "string");
+    assert_eq!(o["range"].doc.as_deref(), Some("[value: start]"));
+    assert_eq!(o["opt"].doc.as_deref(), Some("[value: v] [optional value]"));
+    for needle in [
+        "flag `--range` takes 2 values — only the first is kept",
+        "flag with no `-` spelling dropped",
+        "non-string flag entry dropped",
+    ] {
+        assert!(
+            f.warnings.iter().any(|w| w.contains(needle)),
+            "missing `{needle}`: {:?}",
+            f.warnings
+        );
+    }
+}
+
+#[test]
+fn usage_flag_annotations() {
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        r#"bin "t"
+        cmd "c" {
+          flag "--file <f>" required=#true env="MY_FILE" default="f.txt" \
+            delimiter="," var=#true var_min=1 var_max=3 action="help" \
+            required_if="--mode" required_unless="--stdin" negate="--no-file" \
+            exclusive=#true hide=#true deprecated="use --out" \
+            validate="int(value) > 0" validate_error="must be positive" {
+            conflicts "--a" "--b"
+            requires "--c"
+            overrides "--d"
+            note "A note."
+            warning "A warning."
+          }
+          flag "--old" deprecated=#true
+          flag "--color <w>" { help_md "Pick a **color**"; long_help "Long form." }
+        }"#,
+    )
+    .unwrap();
+    let file = &f.spec.root.commands["c"].options["file"];
+    assert_eq!(file.kind, "strings");
+    assert_eq!(
+        file.doc.as_deref(),
+        Some(
+            "[value: f] [required] [env: MY_FILE] [delimiter: ,] [default: f.txt] \
+             [at least 1 values] [at most 3 values] [action: help] \
+             [conflicts with: --a, --b] [overrides: --d] [requires: --c] \
+             [required if: --mode] [required unless: --stdin] [negated by: --no-file] \
+             [exclusive] [hidden] [deprecated: use --out] \
+             [validation: int(value) > 0 (must be positive)] [note: A note.] [warning: A warning.]"
+        )
+    );
+    let old = &f.spec.root.commands["c"].options["old"];
+    assert_eq!(old.doc.as_deref(), Some("[deprecated]"));
+    let color = &f.spec.root.commands["c"].options["color"];
+    assert_eq!(
+        color.doc.as_deref(),
+        Some("Pick a **color**\n\nLong form. [value: w]")
+    );
+}
+
+#[test]
+fn usage_choices_and_flagset_use() {
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        r#"bin "t"
+        flagset "common" {
+          flag "--profile <p>" help="Profile"
+          arg "[extra]"
+          complete run="x"
+        }
+        cmd "a" {
+          use "common"
+          flag "--env <e>" { choices "dev" "prod" }
+          arg "<word>" { choices "one" "two" }
+        }
+        cmd "b" { use "missing" }
+        cmd "c" { use }
+        flagset"#,
+    )
+    .unwrap();
+    let a = &f.spec.root.commands["a"];
+    assert_eq!(a.options["profile"].flag, "--profile");
+    assert_eq!(a.positionals[0].name, "extra");
+    assert_eq!(a.positionals[0].doc.as_deref(), Some("[optional]"));
+    assert_eq!(
+        a.options["env"].doc.as_deref(),
+        Some("[value: e] [one of: dev, prod]")
+    );
+    assert_eq!(a.positionals[1].name, "word");
+    assert_eq!(a.positionals[1].doc.as_deref(), Some("[one of: one, two]"));
+    for needle in [
+        "`use` names unknown flagset `missing`",
+        "`use` with no flagset name dropped",
+        "flagset `common` node `complete` dropped",
+        "flagset with no name dropped",
+    ] {
+        assert!(
+            f.warnings.iter().any(|w| w.contains(needle)),
+            "missing `{needle}`: {:?}",
+            f.warnings
+        );
+    }
+}
+
+#[test]
+fn usage_args_become_positionals_and_rest() {
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        r#"bin "cp"
+        arg "<source-file>" help="the source"
+        arg "[dest]" default="." env="DEST" hide=#true
+        arg "<start> <end>" var_min=2 var_max=2
+        arg "<extras>..." deprecated=#true
+        arg "[files]" var=#true
+        arg "<ignored>..."
+        arg "+sigil" sigil="+"
+        arg
+        arg "<dup>"
+        arg "<dup>""#,
+    )
+    .unwrap();
+    let root = &f.spec.root;
+    let names: Vec<&str> = root.positionals.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["source_file", "dest", "start", "end", "dup", "dup_2"]
+    );
+    assert_eq!(root.positionals[0].doc.as_deref(), Some("the source"));
+    assert_eq!(
+        root.positionals[1].doc.as_deref(),
+        Some("[optional] [default: .] [env: DEST] [hidden]")
+    );
+    assert_eq!(
+        root.positionals[2].doc.as_deref(),
+        Some("[at least 2 values] [at most 2 values]")
+    );
+    // `var=#true` puts the *last* token on the rest tail — `files`
+    // arrives after `extras` claimed it, so it drops.
+    let rest = root.rest.as_ref().unwrap();
+    assert_eq!(rest.name, "extras");
+    assert_eq!(rest.doc.as_deref(), Some("[deprecated]"));
+    for needle in [
+        "second variadic arg `files` dropped",
+        "second variadic arg `ignored` dropped",
+        "sigil arg `+sigil` dropped",
+        "arg with no name dropped",
+        "duplicate positional `dup` renamed `dup_2`",
+    ] {
+        assert!(
+            f.warnings.iter().any(|w| w.contains(needle)),
+            "missing `{needle}`: {:?}",
+            f.warnings
+        );
+    }
+}
+
+#[test]
+fn usage_cmd_metadata() {
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        r#"bin "t"
+        cmd "a" "extra" hide=#true subcommand_required=#true deprecated=#true {
+          long_help "Long a."
+          help_md "Md a."
+          example "t a"
+          mount run="t m"
+          exec "x"
+          flag "--g" global=#true
+          cmd "deep" { flag "--h" global=#true; cmd "deeper" {} }
+        }
+        cmd "b" display_order=10 help_heading="H"
+        cmd "same" { flag "--one" }
+        cmd "same" { flag "--two" }
+        cmd"#,
+    )
+    .unwrap();
+    let a = &f.spec.root.commands["a"];
+    assert_eq!(
+        a.about.as_deref(),
+        Some("Md a.\n\nLong a. [hidden] [subcommand required] [deprecated]")
+    );
+    for needle in [
+        "cmd `a` extra args dropped: extra",
+        "usage t.a: unsupported nodes dropped: example, exec, mount",
+        "usage t: cmd `b`: unsupported props dropped: display_order, help_heading",
+        "cmd with no name dropped",
+    ] {
+        assert!(
+            f.warnings.iter().any(|w| w.contains(needle)),
+            "missing `{needle}`: {:?}",
+            f.warnings
+        );
+    }
+    // A global declared on `a` reaches `deep` and `deeper`; `deep`'s
+    // own global reaches only its subtree.
+    let deep = &a.commands["deep"];
+    assert!(deep.options.contains_key("g"));
+    assert!(deep.options.contains_key("h"));
+    let deeper = &deep.commands["deeper"];
+    assert!(deeper.options.contains_key("g"));
+    assert!(deeper.options.contains_key("h"));
+    // `g` is global on `a` — `b` is outside `a`'s subtree, so neither
+    // `g` nor `h` reaches it.
+    assert!(!f.spec.root.commands["b"].options.contains_key("h"));
+    assert!(!f.spec.root.commands["b"].options.contains_key("g"));
+    // Same-named `cmd`s merge into one node.
+    let same = &f.spec.root.commands["same"];
+    assert!(same.options.contains_key("one") && same.options.contains_key("two"));
+}
+
+#[test]
+fn usage_dropped_root_constructs_warn() {
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        r#"bin "t"
+        output "json"
+        example "t --help"
+        mount run="t commands"
+        complete run="x"
+        exec "t"
+        junk"#,
+    )
+    .unwrap();
+    assert!(
+        f.warnings.iter().any(|w| w.contains(
+            "usage t: unsupported nodes dropped: complete, example, exec, junk, mount, output"
+        )),
+        "{:?}",
+        f.warnings
+    );
+}
+
+#[test]
+fn usage_errors() {
+    assert_eq!(
+        ForeignSpec::parse(Format::Usage, "flag \"--x\"").unwrap_err(),
+        "usage spec is missing `bin`/`name`"
+    );
+    assert!(
+        ForeignSpec::parse(Format::Usage, "a {")
+            .unwrap_err()
+            .starts_with("failed to parse usage spec: line 1")
+    );
+    // `name` is the fallback when `bin` is absent.
+    let f = ForeignSpec::parse(Format::Usage, "name \"Friendly\"").unwrap();
+    assert_eq!(f.spec.name, "Friendly");
+}
+
+#[test]
+fn usage_spec_round_trips_through_dump() {
+    let f = ForeignSpec::parse(
+        Format::Usage,
+        r#"bin "gh" about "GH CLI"
+        cmd "pr" { cmd "checkout" { arg "<n>"; flag "-b --branch <b>" } }"#,
+    )
+    .unwrap();
+    let yaml = f.spec.dump();
+    let (_d, p) = write_file("u.clispec.yaml", &yaml);
+    let back = CliSpec::load(&p).unwrap();
+    assert_eq!(back, f.spec);
+}
+
+// ------------------------------------------------------------------
+// kdl lexer edges
+// ------------------------------------------------------------------
+
+#[test]
+fn kdl_raw_strings_and_escapes() {
+    use super::foreign::kdl;
+    let nodes = kdl::parse("flag \"-f --force\" { arg r\"<val>\"; arg r##\"<v2>\"## }").unwrap();
+    assert_eq!(nodes[0].name, "flag");
+    let n = kdl::parse("flag \"a\\rb\" \"c\\bd\" \"e\\ff\"").unwrap();
+    assert_eq!(n[0].args[0].as_str(), Some("a\rb"));
+    assert_eq!(n[0].args[1].as_str(), Some("c\x08d"));
+    assert_eq!(n[0].args[2].as_str(), Some("e\x0cf"));
+}
+
+#[test]
+fn kdl_multiline_string_and_error() {
+    use super::foreign::kdl;
+    let ok = kdl::parse("cmd \"x\" { about \"\"\"two\nlines\"\"\" }").unwrap();
+    assert_eq!(ok[0].children[0].name, "about");
+    let err = kdl::parse("cmd \"x\" { about \"\"\"never ends").unwrap_err();
+    assert!(err.contains("unterminated multiline"), "{err}");
+}
+
+#[test]
+fn kdl_block_comment_and_ty_annot() {
+    use super::foreign::kdl;
+    let nodes = kdl::parse("/* lead */ cmd /* mid */ \"x\" { flag \"-a\" v=(int)\"5\" }").unwrap();
+    assert_eq!(nodes[0].name, "cmd");
+    let err = kdl::parse("flag \"-a\" v=(unclosed").unwrap_err();
+    assert!(!err.is_empty());
+}
+
+#[test]
+fn kdl_entry_edges() {
+    use super::foreign::kdl;
+    let nodes = kdl::parse("cmd \"x\" a=1 b=true c=word d=\"str\"").unwrap();
+    assert!(nodes[0].prop("a").is_some());
+    assert!(nodes[0].prop("b").is_some());
+    assert!(nodes[0].prop("c").is_some());
+    assert!(nodes[0].prop("d").is_some());
+}
+
+#[test]
+fn format_label_covers_usage() {
+    assert_eq!(Format::Usage.label(), "usage");
+    assert_eq!(Format::Fig.label(), "fig");
+    assert_eq!(Format::CliSchema.label(), "cli-schema");
+}

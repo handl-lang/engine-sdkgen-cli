@@ -1,7 +1,7 @@
-//! Foreign CLI spec ingestion — JSON spec formats from other
-//! ecosystems lowered into the [`CliSpec`] IR.
+//! Foreign CLI spec ingestion — spec formats from other ecosystems
+//! lowered into the [`CliSpec`] IR.
 //!
-//! Two dialects are recognized:
+//! Three dialects are recognized:
 //!
 //! - **fig** — a serialized [withfig/autocomplete][fig] completion
 //!   spec: the `subcommands` / `options` / `args` tree. `*.fig.json`
@@ -12,6 +12,11 @@
 //!   `schemaVersion`, `commands` / `namespaces`, `parameters` with
 //!   `role` / `type`. `*.cli-schema.json` names and the
 //!   `schemaVersion` / `cli-schema-version` markers select it.
+//! - **usage** — the [usage] spec: KDL `flag "-f --force"` /
+//!   `arg "<x>"` / `cmd "name" { … }` trees (mise ships one).
+//!   `*.kdl` / `*.usage.kdl` names claim it; content is sniffed when
+//!   a document parses as KDL and carries top-level `cmd`/`flag`/
+//!   `arg`/`option`/`usage` nodes.
 //!
 //! Constructs with no IR analog — suggestion generators, intents,
 //! environment requirements — are dropped with a warning naming them
@@ -22,6 +27,10 @@
 //!
 //! [fig]: https://github.com/withfig/autocomplete
 //! [cli-schema]: https://cli-schema.github.io
+//! [usage]: https://usage.jdx.dev
+
+pub(crate) mod kdl;
+pub(crate) mod usage;
 
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -36,6 +45,8 @@ pub enum Format {
     Fig,
     /// cli-schema v1 document.
     CliSchema,
+    /// usage spec (jdx/usage) — a KDL document.
+    Usage,
 }
 
 impl Format {
@@ -44,6 +55,7 @@ impl Format {
         match self {
             Format::Fig => "fig",
             Format::CliSchema => "cli-schema",
+            Format::Usage => "usage",
         }
     }
 }
@@ -64,9 +76,11 @@ impl ForeignSpec {
     /// The dialect `path`/`src` should be parsed as, if any.
     ///
     /// File names claim first (`*.fig.json`, `*.figspec`,
-    /// `*.cli-schema.json`); otherwise JSON content markers decide —
-    /// `schemaVersion`/`cli-schema-version` selects cli-schema, a
-    /// `subcommands` array or fig-shaped `options` rows select fig.
+    /// `*.cli-schema.json`, `*.kdl`/`*.usage.kdl`); otherwise content
+    /// markers decide — `schemaVersion`/`cli-schema-version` selects
+    /// cli-schema, a `subcommands` array or fig-shaped `options` rows
+    /// select fig, and a document that parses as KDL with top-level
+    /// `cmd`/`flag`/`arg`/`option`/`usage` nodes selects usage.
     pub fn detect(path: &Path, src: &str) -> Option<Format> {
         if is_fig_name(path) {
             return Some(Format::Fig);
@@ -74,13 +88,21 @@ impl ForeignSpec {
         if is_cli_schema_name(path) {
             return Some(Format::CliSchema);
         }
-        let v: Value = serde_json::from_str(src).ok()?;
-        let obj = v.as_object()?;
-        if obj.contains_key("cli-schema-version") || obj.contains_key("schemaVersion") {
-            return Some(Format::CliSchema);
+        if is_kdl_name(path) {
+            return Some(Format::Usage);
         }
-        if fig_shaped(obj) {
-            return Some(Format::Fig);
+        if let Ok(v) = serde_json::from_str::<Value>(src) {
+            if let Some(obj) = v.as_object() {
+                if obj.contains_key("cli-schema-version") || obj.contains_key("schemaVersion") {
+                    return Some(Format::CliSchema);
+                }
+                if fig_shaped(obj) {
+                    return Some(Format::Fig);
+                }
+            }
+        }
+        if usage::usage_shaped(src) {
+            return Some(Format::Usage);
         }
         None
     }
@@ -91,6 +113,7 @@ impl ForeignSpec {
         let (spec, warnings) = match format {
             Format::Fig => parse_fig(src)?,
             Format::CliSchema => parse_cli_schema(src)?,
+            Format::Usage => usage::parse_usage(src)?,
         };
         spec.validate()?;
         Ok(Self {
@@ -128,10 +151,18 @@ fn is_cli_schema_name(path: &Path) -> bool {
         .is_some_and(|n| n.ends_with(".cli-schema.json"))
 }
 
+/// `*.kdl` / `*.usage.kdl` — the usage-spec convention (mise's spec
+/// is `mise.usage.kdl`).
+fn is_kdl_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(".kdl"))
+}
+
 /// Whether `path`'s name alone marks a foreign spec — used to error
 /// on missing spec files instead of probing them as tools.
 pub(crate) fn claims_path(path: &Path) -> bool {
-    is_fig_name(path) || is_cli_schema_name(path)
+    is_fig_name(path) || is_cli_schema_name(path) || is_kdl_name(path)
 }
 
 /// A JSON object shaped like a fig spec: a `subcommands` array, or a

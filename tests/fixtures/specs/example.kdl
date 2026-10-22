@@ -1,0 +1,41 @@
+// A usage spec in the shape of jdx/usage's docs (usage.jdx.dev).
+min_usage_version "1.0.0"
+name "My CLI"
+bin "mycli"
+version "1.0.0"
+about "Deploy services from your terminal"
+
+flag "-v --verbose" help="Enable verbose logging" global=#true count=#true
+flag "-q --quiet" help="Enable quiet logging" global=#true
+flag "-u --user <user>" help="User to run as"
+
+flagset "output" {
+  flag "-o --output <file>" help="Write output to a file"
+  flag "--color <when>" default="auto" {
+    choices "auto" "always" "never"
+  }
+}
+
+cmd "deploy" help="Deploy a service" {
+  alias "d"
+  use "output"
+  arg "<service>" help="Service to deploy"
+  flag "-e --env <env>" help="Target environment" default="staging" {
+    choices "staging" "production"
+  }
+  flag "--dry-run" help="Print what would happen"
+  arg "[files]..." help="Extra files to ship"
+}
+
+cmd "config" help="Manage the CLI config" {
+  cmd "add" help="Add a config entry" {
+    // "set" is an alias for "add"
+    alias "set"
+    arg "<key>" help="The key for the config"
+    arg "<value>" help="The value to store"
+    flag "--force" help="Overwrite an existing key" conflicts="--dry-run"
+  }
+  cmd "remove" help="Remove a config entry" deprecated="use `config rm`" {
+    arg "<key>"
+  }
+}

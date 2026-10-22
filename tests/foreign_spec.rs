@@ -1,7 +1,7 @@
 //! Foreign spec ingestion through `CliBackend::parse_header` —
-//! `*.fig.json`, `*.figspec`, and cli-schema documents resolve to the
-//! same `SdkgenModule` IR a `.clispec.yaml` produces; unrecognized
-//! files still fall back to the tool probe.
+//! `*.fig.json`, `*.figspec`, cli-schema documents, and usage-spec
+//! KDL files resolve to the same `SdkgenModule` IR a `.clispec.yaml`
+//! produces; unrecognized files still fall back to the tool probe.
 
 use handl_plugin_sdkgen::SdkgenBackend;
 use handl_plugin_sdkgen_cli::{CliBackend, CliConfig, CliSpec};
@@ -233,4 +233,124 @@ fn foreign_spec_emit_spec_round_trip() {
             .name,
         "extra_args"
     );
+}
+
+#[test]
+fn usage_kdl_spec_loads_through_the_backend() {
+    let m = CliBackend::new(None, CliConfig::default())
+        .parse_header(&fixture("example.kdl"))
+        .unwrap();
+    assert_eq!(m.library, "mycli");
+    let mut names = fn_names(&m);
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        ["mycli_config_add", "mycli_config_remove", "mycli_deploy"],
+        "{names:?}"
+    );
+    let deploy = m
+        .functions
+        .iter()
+        .find(|f| f.name == "mycli_deploy")
+        .unwrap();
+    // `use "output"` splices the flagset in; the two `global=#true`
+    // root flags reach every leaf.
+    assert_eq!(
+        deploy.arg_descriptors,
+        vec![
+            "pos:service",
+            "opt:string:color:--color",
+            "opt:flag:dry_run:--dry-run",
+            "opt:string:env:--env",
+            "opt:string:output:--output",
+            "opt:flag:quiet:--quiet",
+            "opt:flag:verbose:--verbose",
+            "rest:files",
+            "meta:json-capable",
+        ]
+    );
+    let env_doc = deploy
+        .arg_descriptors
+        .iter()
+        .find(|d| d.contains("--env"));
+    assert!(env_doc.is_some());
+    assert_eq!(
+        deploy.doc.as_deref(),
+        Some("Deploy a service [aliases: d]")
+    );
+    let add = m
+        .functions
+        .iter()
+        .find(|f| f.name == "mycli_config_add")
+        .unwrap();
+    assert_eq!(
+        add.arg_descriptors,
+        vec![
+            "pos:key",
+            "pos:value",
+            "opt:flag:force:--force",
+            "opt:flag:quiet:--quiet",
+            "opt:flag:verbose:--verbose",
+        ]
+    );
+    let remove = m
+        .functions
+        .iter()
+        .find(|f| f.name == "mycli_config_remove")
+        .unwrap();
+    assert_eq!(
+        remove.doc.as_deref(),
+        Some("Remove a config entry [deprecated: use `config rm`]")
+    );
+    // `min_usage_version`, `version`, and the flagset's own
+    // `complete`-style machinery are consumed or warned about.
+    assert!(m.diagnostics.is_empty(), "{:?}", m.diagnostics);
+}
+
+#[test]
+fn usage_kdl_name_claims_and_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    for name in ["no.kdl", "no.usage.kdl"] {
+        let e = CliBackend::new(None, CliConfig::default())
+            .parse_header(&tmp.path().join(name))
+            .unwrap_err();
+        assert!(e.to_string().contains("cli spec not found"), "{name}: {e}");
+    }
+    let p = write_spec(tmp.path(), "bad.kdl", "bin {oops");
+    let e = CliBackend::new(None, CliConfig::default())
+        .parse_header(&p)
+        .unwrap_err();
+    assert!(e.to_string().contains("failed to parse usage spec"), "{e}");
+}
+
+#[test]
+fn usage_kdl_content_sniffing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let p = write_spec(
+        tmp.path(),
+        "tool.txt",
+        "bin \"sniffed\"\ncmd \"go\" { arg \"<x>\" }",
+    );
+    let m = CliBackend::new(None, CliConfig::default())
+        .parse_header(&p)
+        .unwrap();
+    assert_eq!(fn_names(&m), ["sniffed_go"]);
+}
+
+#[test]
+fn usage_kdl_emit_spec_round_trip() {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("mycli.clispec.yaml");
+    let cfg = CliConfig {
+        emit_spec: Some(out.to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    CliBackend::new(None, cfg)
+        .parse_header(&fixture("example.kdl"))
+        .unwrap();
+    let spec = CliSpec::load(&out).unwrap();
+    assert_eq!(spec.name, "mycli");
+    let deploy = &spec.root.commands["deploy"];
+    assert_eq!(deploy.rest.as_ref().unwrap().name, "files");
+    assert!(deploy.options.contains_key("output"));
 }
