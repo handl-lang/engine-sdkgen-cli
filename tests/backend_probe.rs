@@ -50,7 +50,7 @@ fn existing_executable_path_is_probed() {
         .unwrap();
     assert_eq!(
         shared.arg_descriptors,
-        vec!["pos:name", "opt:flag:child_opt:--child-opt"]
+        vec!["pos:name", "opt:flag:child_opt:--child-opt:C"]
     );
     // `c_decl` shows the tool name (basename), not the probe path.
     assert_eq!(shared.c_decl, "faketool shared");
@@ -112,7 +112,7 @@ fn spec_with_probe_merges_authored_over_probed() {
         .unwrap();
     assert_eq!(
         extra.arg_descriptors,
-        vec!["pos:name", "opt:flag:child_opt:--child-opt"]
+        vec!["pos:name", "opt:flag:child_opt:--child-opt:C"]
     );
 }
 

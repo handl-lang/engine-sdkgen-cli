@@ -267,7 +267,7 @@ fn probe_node(
         node.options.entry(opt.name).or_insert(OptionSpec {
             flag: opt.flag,
             kind: opt.kind,
-            doc: None,
+            doc: opt.doc,
         });
     }
     // Names the loose-block promotion invented (see

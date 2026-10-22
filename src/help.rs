@@ -67,6 +67,8 @@ pub struct ParsedOption {
     pub flag: String,
     /// `flag` | `string` | `int` | `strings` (repeatable).
     pub kind: String,
+    /// Description from the row's description column, if any.
+    pub doc: Option<String>,
 }
 
 /// What [`parse_help`] extracted from one help text.
@@ -1111,6 +1113,7 @@ fn parse_option_row(trimmed: &str) -> Option<(ParsedOption, usize)> {
             name,
             flag: flag.clone(),
             kind: kind.to_string(),
+            doc: (!desc.trim().is_empty()).then(|| desc.trim().to_string()),
         },
         dropped,
     ))

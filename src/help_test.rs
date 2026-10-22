@@ -18,16 +18,19 @@ fn cobra_style_usage_flags_and_subcommands() {
                 name: "title".into(),
                 flag: "--title".into(),
                 kind: "string".into(),
+                doc: Some("Title of the pull request".into()),
             },
             ParsedOption {
                 name: "body".into(),
                 flag: "--body".into(),
                 kind: "string".into(),
+                doc: Some("Body of the pull request".into()),
             },
             ParsedOption {
                 name: "draft".into(),
                 flag: "--draft".into(),
                 kind: "flag".into(),
+                doc: Some("Mark the pull request as a draft".into()),
             },
             // "can be used multiple times" — the row's own text proves
             // repeatability, so the kind is `strings`.
@@ -35,22 +38,26 @@ fn cobra_style_usage_flags_and_subcommands() {
                 name: "label".into(),
                 flag: "--label".into(),
                 kind: "strings".into(),
+                doc: Some("Add labels (can be used multiple times)".into()),
             },
             ParsedOption {
                 name: "jobs".into(),
                 flag: "--jobs".into(),
                 kind: "int".into(),
+                doc: Some("Maximum jobs to run in parallel".into()),
             },
             // Global Flags: section is an options table too.
             ParsedOption {
                 name: "repo".into(),
                 flag: "--repo".into(),
                 kind: "string".into(),
+                doc: Some("Select another repository".into()),
             },
             ParsedOption {
                 name: "verbose".into(),
                 flag: "--verbose".into(),
                 kind: "flag".into(),
+                doc: Some("Enable verbose output".into()),
             },
         ]
     );
