@@ -18,12 +18,14 @@
 //!   a document parses as KDL and carries top-level `cmd`/`flag`/
 //!   `arg`/`option`/`usage` nodes.
 //!
-//! Constructs with no IR analog — suggestion generators, intents,
-//! environment requirements — are dropped with a warning naming them
-//! (`fig git.checkout: unsupported subcommand fields dropped:
-//! loadSpec`). Relations the IR cannot check — `exclusiveOn`,
-//! `dependsOn`, aliases, `required` — degrade into doc annotations
-//! (`[exclusive with: --interactive]`).
+//! Constructs with no IR analog but useful meaning — fig suggestion
+//! `generators`, cli-schema `intent`/`environment` declarations —
+//! degrade into bracketed doc annotations (`[generator: filepaths]`,
+//! `[intent: destructive, scope: global]`, `[env: GITHUB_TOKEN
+//! (required)]`), the same convention `exclusiveOn`/`dependsOn`/
+//! aliases/`required` already use. Anything else unrecognized is
+//! dropped with a warning naming it (`fig git.checkout: unsupported
+//! subcommand fields dropped: loadSpec`).
 //!
 //! [fig]: https://github.com/withfig/autocomplete
 //! [cli-schema]: https://cli-schema.github.io
@@ -343,7 +345,14 @@ const FIG_OPTION_KEYS: &[&str] = &[
     "exclusiveOn",
     "dependsOn",
 ];
-const FIG_ARG_KEYS: &[&str] = &["name", "description", "isVariadic", "isOptional", "default"];
+const FIG_ARG_KEYS: &[&str] = &[
+    "name",
+    "description",
+    "isVariadic",
+    "isOptional",
+    "default",
+    "generators",
+];
 
 fn parse_fig(src: &str) -> Result<(CliSpec, Vec<String>), String> {
     let v: Value =
@@ -523,6 +532,11 @@ fn fig_option(o: &Map<String, Value>, path: &str, node: &mut CommandNode, w: &mu
             anns.push(format!("{label}: {}", rel.join(", ")));
         }
     }
+    if let Some(first) = arg_objs.first()
+        && let Some(a) = fig_generators_ann(first.get("generators"))
+    {
+        anns.push(a);
+    }
 
     let spec = OptionSpec {
         flag: flag.clone(),
@@ -558,6 +572,9 @@ fn fig_args(args: &Value, path: &str, node: &mut CommandNode, w: &mut Vec<String
         if let Some(d) = a.get("default").and_then(Value::as_str) {
             anns.push(format!("default: {d}"));
         }
+        if let Some(g) = fig_generators_ann(a.get("generators")) {
+            anns.push(g);
+        }
         let name = a
             .get("name")
             .and_then(Value::as_str)
@@ -581,19 +598,70 @@ fn fig_args(args: &Value, path: &str, node: &mut CommandNode, w: &mut Vec<String
     }
 }
 
+/// A fig `generators` entry — object or array of suggestion sources
+/// (`{"template": "filepaths"}`, `{"script": "ls"}`, `{"custom":
+/// "fn"}`). The IR cannot run completion generators, so they degrade
+/// to a `generator: <what>` / `generators: <a>, <b>` doc annotation.
+fn fig_generators_ann(v: Option<&Value>) -> Option<String> {
+    let list: Vec<&Value> = match v? {
+        Value::Array(a) => a.iter().collect(),
+        other => vec![other],
+    };
+    if list.is_empty() {
+        return None;
+    }
+    let descs: Vec<String> = list.iter().map(|g| fig_generator_desc(g)).collect();
+    let key = if descs.len() == 1 {
+        "generator"
+    } else {
+        "generators"
+    };
+    Some(format!("{key}: {}", descs.join(", ")))
+}
+
+/// One generator's one-line descriptor: its `template` name(s),
+/// `script <cmd>`, `custom <fn>` — or a bare `custom` when the shape
+/// is unrecognized.
+fn fig_generator_desc(g: &Value) -> String {
+    let Some(o) = g.as_object() else {
+        return g.as_str().unwrap_or("custom").to_string();
+    };
+    if let Some(t) = o.get("template") {
+        let names = strings(Some(t));
+        if names.is_empty() {
+            "template".to_string()
+        } else {
+            names.join("+")
+        }
+    } else if let Some(s) = o.get("script") {
+        let cmd = strings(Some(s)).join(" ");
+        if cmd.is_empty() {
+            "script".to_string()
+        } else {
+            format!("script `{cmd}`")
+        }
+    } else if let Some(c) = o.get("custom").and_then(Value::as_str) {
+        format!("custom {c}")
+    } else {
+        "custom".to_string()
+    }
+}
+
 // ------------------------------------------------------------------
 // cli-schema v1
 // ------------------------------------------------------------------
 
 /// `version`/`schemaVersion` count as consumed (read, just unused by
-/// the IR); everything else unlisted — `environment`, `intent`,
-/// `authCommands` — is reported as dropped.
+/// the IR); `environment`/`intent` degrade to doc annotations rather
+/// than IR fields; everything else unlisted — `authCommands`,
+/// `reservedMetaCommands`, `output` — is reported as dropped.
 const CS_ROOT_KEYS: &[&str] = &[
     "schemaVersion",
     "cli-schema-version",
     "name",
     "version",
     "description",
+    "environment",
     "globalOptions",
     "rootDefault",
     "commands",
@@ -608,6 +676,7 @@ const CS_COMMAND_KEYS: &[&str] = &[
     "aliases",
     "hidden",
     "deprecated",
+    "intent",
 ];
 const CS_NAMESPACE_KEYS: &[&str] = &[
     "segment",
@@ -670,6 +739,12 @@ fn parse_cli_schema(src: &str) -> Result<(CliSpec, Vec<String>), String> {
             .map(str::to_string),
         ..Default::default()
     };
+    // The root `environment` object declares env vars and config
+    // files the program needs — doc annotations on the module, not IR.
+    let env_anns = cs_environment_anns(obj.get("environment"));
+    if !env_anns.is_empty() {
+        spec.about = join_doc(spec.about.as_deref(), &env_anns);
+    }
 
     // `globalOptions` are flags every command accepts — propagate them
     // down the tree (a command's own spelling wins) and into the root
@@ -754,6 +829,78 @@ fn summary_notes(obj: &Map<String, Value>) -> Option<String> {
         (None, Some(n)) => Some(n.to_string()),
         (None, None) => None,
     }
+}
+
+/// A command's `intent` object — the side-effect profile
+/// (`destructive`, `idempotent`, `scope`, `requiresConfirmation`,
+/// `requiresAuth`) — flattens to one `intent: …` doc annotation. True
+/// booleans become bare words (`requiresConfirmation` → `requires
+/// confirmation`), non-empty strings render `key: value`.
+fn cs_intent_ann(v: Option<&Value>) -> Option<String> {
+    let o = v?.as_object()?;
+    let mut parts = Vec::new();
+    for (k, val) in o {
+        let label = match k.as_str() {
+            "requiresConfirmation" => "requires confirmation",
+            "requiresAuth" => "requires auth",
+            other => other,
+        };
+        match val {
+            Value::Bool(true) => parts.push(label.to_string()),
+            Value::String(s) if !s.is_empty() => parts.push(format!("{label}: {s}")),
+            _ => {}
+        }
+    }
+    (!parts.is_empty()).then(|| format!("intent: {}", parts.join(", ")))
+}
+
+/// The root `environment` object — `variables` (env vars) and
+/// `configFiles` — flattens to `env: A, B (required)` / `config:
+/// path` annotations on the module doc.
+fn cs_environment_anns(v: Option<&Value>) -> Vec<String> {
+    let mut anns = Vec::new();
+    let Some(o) = v.and_then(Value::as_object) else {
+        return anns;
+    };
+    let vars: Vec<String> = o
+        .get("variables")
+        .and_then(Value::as_array)
+        .map(|vs| {
+            vs.iter()
+                .filter_map(|v| {
+                    let name = v.get("name").and_then(Value::as_str)?.to_string();
+                    Some(if truthy(v.get("required")) {
+                        format!("{name} (required)")
+                    } else {
+                        name
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !vars.is_empty() {
+        anns.push(format!("env: {}", vars.join(", ")));
+    }
+    let files: Vec<String> = o
+        .get("configFiles")
+        .and_then(Value::as_array)
+        .map(|fs| {
+            fs.iter()
+                .filter_map(|f| {
+                    let path = f.get("path").and_then(Value::as_str)?.to_string();
+                    Some(if truthy(f.get("required")) {
+                        format!("{path} (required)")
+                    } else {
+                        path
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !files.is_empty() {
+        anns.push(format!("config: {}", files.join(", ")));
+    }
+    anns
 }
 
 /// `deprecated: bool | { message, replacement }` → doc annotation.
@@ -1038,6 +1185,9 @@ fn cs_command(
     }
     if let Some(d) = deprecated_ann(c.get("deprecated")) {
         anns.push(d);
+    }
+    if let Some(i) = cs_intent_ann(c.get("intent")) {
+        anns.push(i);
     }
     if let Some(about) = join_doc(summary_notes(c).as_deref(), &anns) {
         node.about = Some(about);

@@ -11,9 +11,11 @@
 //!   and indented continuation lines are alternate forms (`or:`-led
 //!   alternates are ignored). `SYNOPSIS`-headed man pages feed the
 //!   same path. Parenthesized alternation groups
-//!   (`(TYPE NAME | -f FILE)`) are skipped whole — their pieces are
-//!   alternatives, not positionals — and quoted option values
-//!   (`--schedule='0/5 * * * ?'`) stay single tokens.
+//!   (`(TYPE NAME | -f FILE)`) are modeled, not skipped: an
+//!   all-positional alternation emits alternative[0]'s positionals
+//!   (`(TYPE NAME | TYPE/NAME)` → `type`, `name`), a flag-bearing one
+//!   flattens to a named `rest` tail with a warning, and quoted option
+//!   values (`--schedule='0/5 * * * ?'`) stay single tokens.
 //! - `Flags:`/`Options:`/`Global Flags:`/`Valid options are:` tables —
 //!   rows like `-t, --title <string>`, `--draft`, `--opt=VAL`, and
 //!   single-dash longs (`-cipher`, `-version`). kubectl's
@@ -169,7 +171,11 @@ pub fn parse_help(text: &str, prog_words: usize) -> ParsedHelp {
     // header (git's `start a working area`), or under an unknown
     // `Foo:` header — are buffered so the block can be promoted to a
     // command list when its rows turn out command-shaped.
+    // `loose_noncommand` marks documentation-section headers (git's
+    // concept guides / manual topics / interfaces lists) whose
+    // command-shaped rows are `help <topic>` names, not subcommands.
     let mut loose_named: Option<String> = None;
+    let mut loose_noncommand = false;
     let mut loose_rows = 0usize;
     let mut loose_flags = 0usize;
     let mut loose_cmds: Vec<(String, String)> = Vec::new();
@@ -202,6 +208,7 @@ pub fn parse_help(text: &str, prog_words: usize) -> ParsedHelp {
             }
             flush_loose(
                 &mut loose_named,
+                &mut loose_noncommand,
                 &mut loose_rows,
                 &mut loose_flags,
                 &mut loose_cmds,
@@ -225,6 +232,7 @@ pub fn parse_help(text: &str, prog_words: usize) -> ParsedHelp {
             close_section(section, &header, opt_rows, &mut out.warnings);
             flush_loose(
                 &mut loose_named,
+                &mut loose_noncommand,
                 &mut loose_rows,
                 &mut loose_flags,
                 &mut loose_cmds,
@@ -306,6 +314,7 @@ pub fn parse_help(text: &str, prog_words: usize) -> ParsedHelp {
             close_section(section, &header, opt_rows, &mut out.warnings);
             flush_loose(
                 &mut loose_named,
+                &mut loose_noncommand,
                 &mut loose_rows,
                 &mut loose_flags,
                 &mut loose_cmds,
@@ -318,8 +327,17 @@ pub fn parse_help(text: &str, prog_words: usize) -> ParsedHelp {
             header = trimmed.trim_end_matches(':').trim().to_string();
             opt_rows = 0;
             section_rows = 0;
-            if section == Section::None && trimmed.ends_with(':') {
-                loose_named = Some(header.clone());
+            loose_noncommand = false;
+            if section == Section::None {
+                if non_command_header(&normalized_head(trimmed)) {
+                    // Documentation/topic sections — rows name `help
+                    // <topic>` pages; keep the header for the warning
+                    // but keep the rows from promoting.
+                    loose_named = Some(header.clone());
+                    loose_noncommand = true;
+                } else if trimmed.ends_with(':') {
+                    loose_named = Some(header.clone());
+                }
             }
             continue;
         }
@@ -385,6 +403,7 @@ pub fn parse_help(text: &str, prog_words: usize) -> ParsedHelp {
     close_section(section, &header, opt_rows, &mut out.warnings);
     flush_loose(
         &mut loose_named,
+        &mut loose_noncommand,
         &mut loose_rows,
         &mut loose_flags,
         &mut loose_cmds,
@@ -477,12 +496,15 @@ fn push_subcommand(
 /// command-shaped rows (`name   desc` or `* name` bullets — git's
 /// prose-headed groups, aws's `* service` list, `git help -a`'s
 /// `… Commands / Interrogators` sections), promote them to
-/// subcommands; otherwise keep the historical diagnostics —
+/// subcommands — unless the stretch's header is a known documentation
+/// list (`noncommand`), where command-shaped rows are `help <topic>`
+/// page names; otherwise keep the historical diagnostics —
 /// `unrecognized section` under a colon header, stray counts
 /// otherwise.
 #[allow(clippy::too_many_arguments)]
 fn flush_loose(
     named: &mut Option<String>,
+    noncommand: &mut bool,
     rows: &mut usize,
     flags: &mut usize,
     cmds: &mut Vec<(String, String)>,
@@ -491,7 +513,7 @@ fn flush_loose(
     out: &mut ParsedHelp,
     table_subs: &mut HashSet<String>,
 ) {
-    if cmds.len() >= 2 && cmds.len() * 2 >= *rows {
+    if !*noncommand && cmds.len() >= 2 && cmds.len() * 2 >= *rows {
         for (name, desc) in cmds.drain(..) {
             // A name a commands table or usage `{a|b}` group already
             // recorded keeps its stronger provenance — only rows the
@@ -515,6 +537,7 @@ fn flush_loose(
     *flags = 0;
     cmds.clear();
     *named = None;
+    *noncommand = false;
 }
 
 /// A command-list row in an unrecognized stretch: either a `* name
@@ -553,10 +576,12 @@ fn is_or_line(trimmed: &str) -> bool {
     trimmed == "or" || trimmed.starts_with("or:") || trimmed.starts_with("or ")
 }
 
-/// Map a header line to a section kind — suffix-matched, so
-/// `Global Flags`, `Valid options are`, `The commands are`, and
-/// parenthesized headers (`normal options (always true)`) all land.
-fn section_header(trimmed: &str) -> Section {
+/// The header text normalized for matching — colon and `(…)`
+/// qualifiers cut, lowercased, and trailing copula phrases (`are`,
+/// `is`, `as follows`, `include`) stripped: `The commands are:` →
+/// `the commands`, `The Git concept guides are:` → `the git concept
+/// guides`.
+fn normalized_head(trimmed: &str) -> String {
     let mut head = trimmed.trim_end_matches(':').to_lowercase();
     if let Some(i) = head.find('(') {
         head = head[..i].trim_end().to_string();
@@ -580,6 +605,26 @@ fn section_header(trimmed: &str) -> Section {
             break;
         }
     }
+    head
+}
+
+/// An unrecognized header that heads a *documentation* list — `git
+/// help -a`'s concept topics (`User-facing repository, command and
+/// file interfaces`, `Manual topics`), `git help -g`'s `The Git
+/// concept guides are:` — whose rows name `git help <topic>` pages,
+/// not argv subcommands. Suppressing promotion here keeps those rows
+/// out of `subcommands` without a doomed probe per topic.
+fn non_command_header(head: &str) -> bool {
+    ["concept", "topic", "guide", "manual", "interface"]
+        .iter()
+        .any(|w| head.contains(w))
+}
+
+/// Map a header line to a section kind — suffix-matched, so
+/// `Global Flags`, `Valid options are`, `The commands are`, and
+/// parenthesized headers (`normal options (always true)`) all land.
+fn section_header(trimmed: &str) -> Section {
+    let head = normalized_head(trimmed);
     if head.ends_with("flags")
         || head.ends_with("options")
         || head.ends_with("optionals")
@@ -675,9 +720,11 @@ fn usage_tokens(body: &str) -> Vec<String> {
 /// skipping the first `prog_words` program tokens. `{a,b}`/`{a|b}`
 /// groups are subcommand choice lists; their names are also recorded
 /// in `brace_names` so unmatched groups can be diagnosed.
-/// `skipped_groups` counts parenthesized alternation groups
-/// (`(TYPE NAME | -f FILE)`) whose pieces cannot be flattened into
-/// positionals — reported once in `warnings`.
+/// `skipped_groups` counts parenthesized groups that turn out not to
+/// be flattenable alternations (`([--limits=X & --requests=Y]`,
+/// `[(-o|--output=)json|yaml]`) — reported once in `warnings`.
+/// Real alternations (`(TYPE NAME | -f FILE)`) are buffered whole and
+/// modeled by [`finish_alternation`].
 fn parse_usage(
     body: &str,
     prog_words: usize,
@@ -689,18 +736,20 @@ fn parse_usage(
     // A `[` group that opens on an option token (`[-D debugopts]`)
     // swallows its metavar — skip until the `]` closes.
     let mut opt_group = false;
-    // A `(` group (`(TYPE NAME | -f FILE)`) is an alternation — its
-    // pieces are alternatives, not positionals; flattening it leaked
-    // option words like `label`/`f` as positional names (kubectl).
+    // A `(` group is buffered token-by-token until its `)` — the
+    // alternation it carries is modeled when the group closes.
     let mut group_depth = 0usize;
+    let mut group: Vec<String> = Vec::new();
     for tok in usage_tokens(body).iter().skip(prog_words) {
         let opens = tok.matches('(').count();
         let closes = tok.matches(')').count();
         if group_depth > 0 || opens > 0 || closes > 0 {
-            if group_depth == 0 {
-                *skipped_groups += 1;
-            }
+            group.push(tok.clone());
             group_depth = (group_depth + opens).saturating_sub(closes);
+            if group_depth == 0 {
+                finish_alternation(&group, out, &mut seen, skipped_groups);
+                group.clear();
+            }
             continue;
         }
         if opt_group {
@@ -768,6 +817,212 @@ fn parse_usage(
             out.positionals.push(pos);
         }
     }
+    // A group left open by a truncated usage line (`kubectl set
+    // resources`'s `([--limits=… & --requests=…]` tail) is analyzed at
+    // end-of-line the same way a closed one is.
+    if !group.is_empty() {
+        finish_alternation(&group, out, &mut seen, skipped_groups);
+    }
+}
+
+/// Emit one parsed positional: a `variadic` token lands on `rest` —
+/// or, when `rest` is already taken, falls back to an ordinary
+/// positional (two `x...` tails cannot both hold the argv tail;
+/// keeping the name as a plain positional is the least-wrong shape).
+fn emit_positional(
+    out: &mut ParsedHelp,
+    seen: &mut HashSet<String>,
+    mut pos: ParsedPositional,
+) {
+    if pos.variadic && out.rest.is_none() {
+        out.rest = Some(pos);
+    } else {
+        pos.variadic = false;
+        if seen.insert(pos.name.clone()) {
+            out.positionals.push(pos);
+        }
+    }
+}
+
+/// A token inside an alternation is flag-like once its bracketing
+/// decoration is stripped — `-f`, `[-f`, `-l`, `--all)]`.
+fn alt_flag_like(tok: &str) -> bool {
+    tok.trim_matches(|c| "[](){}<>\"'".contains(c))
+        .starts_with('-')
+}
+
+/// The argument name a metavar-ish token inside an alternation yields
+/// — `NAME` → `name`, `TYPE[.VERSION][.GROUP]/NAME` →
+/// `type_version_group_name`, `KEY=VAL` → `key`. Unnameable tokens
+/// (option spellings, `a|b` choice metas, punctuation, marker words)
+/// return `None`.
+fn positional_name(tok: &str) -> Option<String> {
+    let inner = tok.trim_matches(|c| "[](){}<>.".contains(c));
+    if inner.is_empty()
+        || inner.contains('|')
+        || inner.contains(',')
+        || inner.starts_with('-')
+    {
+        return None;
+    }
+    let inner = inner.split('=').next().unwrap_or(inner);
+    let lower = inner.to_lowercase();
+    if USAGE_MARKERS.contains(&lower.as_str()) {
+        return None;
+    }
+    let name = lower.to_snake_case();
+    (name.chars().any(|c| c.is_alphanumeric())).then_some(name)
+}
+
+/// Split a buffered `(`-group's tokens into `|`-separated
+/// alternatives. The group's own outer parens are stripped from the
+/// first/last token; a `|` nested inside `[…]`/`(…)` (`[NAME | -l
+/// label]`) belongs to its alternative, not the top-level split.
+fn split_alternatives(group: &[String]) -> Vec<Vec<String>> {
+    let mut alts: Vec<Vec<String>> = vec![Vec::new()];
+    let mut depth = 0i32;
+    let last = group.len() - 1;
+    for (i, tok) in group.iter().enumerate() {
+        let t = if i == 0 {
+            tok.trim_start_matches('(')
+        } else {
+            tok.as_str()
+        };
+        let t = if i == last { t.trim_end_matches(')') } else { t };
+        if t.is_empty() {
+            continue;
+        }
+        if depth == 0 && t == "|" {
+            alts.push(Vec::new());
+            continue;
+        }
+        depth += (t.matches('[').count() + t.matches('{').count() + t.matches('(').count()) as i32;
+        depth -= (t.matches(']').count() + t.matches('}').count() + t.matches(')').count()) as i32;
+        alts.last_mut()
+            .expect("the alternatives list always holds one")
+            .push(t.to_string());
+    }
+    alts.retain(|a| !a.is_empty());
+    alts
+}
+
+/// Pick the name for a flattened alternation's `rest` tail:
+/// 1. the leading nameable token of the first *fully positional*
+///    alternative — `TYPE NAME` in `(-f FILENAME | TYPE NAME)` reads
+///    as a variadic `type` list;
+/// 2. the head of the first alternative that merely *leads* with a
+///    positional token — `TYPE [(NAME | -l label | --all)]`;
+/// 3. the metavar following the first flag token — `[-f FILENAME]`
+///    reads as a `filename` list (kubectl apply's `(-f FILENAME | -k
+///    DIRECTORY)`);
+/// 4. `args`.
+fn alternation_rest_name(alts: &[Vec<String>]) -> String {
+    for alt in alts {
+        if alt.iter().all(|t| !alt_flag_like(t))
+            && let Some(n) = alt.iter().find_map(|t| positional_name(t))
+        {
+            return n;
+        }
+    }
+    for alt in alts {
+        if let Some(first) = alt.first()
+            && !alt_flag_like(first)
+            && let Some(n) = positional_name(first)
+        {
+            return n;
+        }
+    }
+    let toks: Vec<&String> = alts.iter().flatten().collect();
+    for (i, t) in toks.iter().enumerate() {
+        if alt_flag_like(t) {
+            if let Some((_, mv)) = t.split_once('=')
+                && let Some(n) = positional_name(mv)
+            {
+                return n;
+            }
+            if let Some(n) = toks[i + 1..].iter().find_map(|t| positional_name(t)) {
+                return n;
+            }
+        }
+    }
+    "args".to_string()
+}
+
+/// Model a buffered `(`-group once it closes. The pieces are
+/// alternatives, not a positional sequence, so the honest shapes are:
+///
+/// - **Every alternative positional-shaped** — `(TYPE NAME |
+///   TYPE/NAME)` (kubectl rollout undo), `(docker-registry | generic |
+///   tls)` (kubectl create secret): the group stands where one
+///   argument chain could, so alternative[0]'s nameable tokens become
+///   positionals — the least-wrong reading of the same argv slot.
+/// - **Some alternative carries a flag** — `(-f FILENAME | TYPE NAME)`
+///   (kubectl set/scale/annotate), `(TYPE NAME | -f FILE)`: no single
+///   word covers both shapes, so the group flattens to the variadic
+///   `rest` tail (`TYPE NAME`'s two words fit a `type...` list) named
+///   by [`alternation_rest_name`], with a warning noting the
+///   alternation was flattened.
+/// - **Fewer than two `|` alternatives** — a conjunction
+///   (`([--limits=X & --requests=Y]`, never closed on kubectl's
+///   malformed usage line) or a single token
+///   (`[(-o|--output=)json|yaml]`, an option-value choice list): not
+///   an alternation the IR can read; counted for the "skipped" warning
+///   as before.
+fn finish_alternation(
+    group: &[String],
+    out: &mut ParsedHelp,
+    seen: &mut HashSet<String>,
+    skipped_groups: &mut usize,
+) {
+    let alts = split_alternatives(group);
+    if alts.len() < 2 {
+        *skipped_groups += 1;
+        return;
+    }
+    if alts.iter().all(|alt| alt.iter().all(|t| !alt_flag_like(t))) {
+        // All positional-shaped — emit alternative[0]'s tokens. A
+        // `...` on or after a token marks it the variadic tail.
+        let mut names: Vec<ParsedPositional> = Vec::new();
+        for t in &alts[0] {
+            let variadic = t.contains("...");
+            match positional_name(t) {
+                Some(name) => names.push(ParsedPositional {
+                    name,
+                    variadic,
+                    doc: None,
+                }),
+                None if variadic => {
+                    if let Some(last) = names.last_mut() {
+                        last.variadic = true;
+                    }
+                }
+                None => {}
+            }
+        }
+        for pos in names {
+            emit_positional(out, seen, pos);
+        }
+        return;
+    }
+    let name = alternation_rest_name(&alts);
+    let slot = if out.rest.is_none() {
+        "rest"
+    } else {
+        "positional"
+    };
+    emit_positional(
+        out,
+        seen,
+        ParsedPositional {
+            name: name.clone(),
+            variadic: true,
+            doc: None,
+        },
+    );
+    out.warnings.push(format!(
+        "alternation `{}` flattened to a {slot} argument `{name}`",
+        group.join(" ")
+    ));
 }
 
 /// Parse one option-table row: `-t, --title <string>   PR title` →

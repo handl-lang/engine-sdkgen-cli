@@ -326,7 +326,9 @@ fn fig_malformed_nodes_warn_and_skip() {
     for needle in [
         "non-object option dropped",
         "option with no usable name dropped",
-        "unsupported arg #1 fields dropped: generators, suggestions",
+        // `generators` is consumed into a doc annotation — only
+        // `suggestions` still drops.
+        "unsupported arg #1 fields dropped: suggestions",
         "non-object arg dropped",
         "non-object subcommand dropped",
         "subcommand with no name dropped",
@@ -337,6 +339,68 @@ fn fig_malformed_nodes_warn_and_skip() {
             f.warnings
         );
     }
+    assert_eq!(
+        f.spec.root.positionals[0].doc.as_deref(),
+        Some("[generator: script `ls`]")
+    );
+}
+
+#[test]
+fn fig_generators_degrade_to_doc_annotations() {
+    let f = ForeignSpec::parse(
+        Format::Fig,
+        r#"{
+          "name": "t",
+          "options": [
+            {"name": "--out", "args": {"name": "f", "generators": {"template": "filepaths"}}}
+          ],
+          "args": [
+            {"name": "one", "generators": [{"template": "filepaths"}, {"script": "ls"}]},
+            {"name": "two", "generators": {"template": ["filepaths", "folders"]}},
+            {"name": "three", "generators": {"custom": "myFn"}},
+            {"name": "four", "generators": {"getQueryTerm": true}},
+            {"name": "five", "generators": ["filepaths", 42]},
+            {"name": "six", "generators": []},
+            {"name": "seven", "generators": {"script": ["a", "b"]}},
+            {"name": "eight", "generators": {"template": {}}},
+            {"name": "nine", "generators": {"script": []}}
+          ]
+        }"#,
+    )
+    .unwrap();
+    // A generator on an option's arg annotates the option's doc too.
+    assert_eq!(
+        f.spec.root.options["out"].doc.as_deref(),
+        Some("[value: f] [generator: filepaths]")
+    );
+    let docs: Vec<&str> = f
+        .spec
+        .root
+        .positionals
+        .iter()
+        .map(|p| p.doc.as_deref().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        docs,
+        [
+            "[generators: filepaths, script `ls`]",
+            "[generator: filepaths+folders]",
+            "[generator: custom myFn]",
+            "[generator: custom]",
+            "[generators: filepaths, custom]",
+            // An empty `generators` array yields no annotation.
+            "",
+            "[generator: script `a b`]",
+            "[generator: template]",
+            "[generator: script]",
+        ]
+    );
+    // Nothing about `generators` drops anymore.
+    assert!(
+        !f.warnings.iter().any(|w| w.contains("generators")),
+        "{:?}",
+        f.warnings
+    );
 }
 
 #[test]
@@ -618,14 +682,30 @@ fn cli_schema_annotations_and_dropped_fields() {
         r#"{
           "schemaVersion": 1,
           "name": "t",
-          "environment": {"variables": []},
+          "environment": {
+            "variables": [
+              {"name": "T_TOKEN", "required": true, "description": "API token"},
+              {"name": "T_DEBUG"},
+              {"description": "nameless — filtered out"}
+            ],
+            "configFiles": [
+              {"path": "~/.trc", "required": true},
+              {"path": "~/.t.toml"}
+            ]
+          },
           "requiresAuth": true,
           "commands": [
             {
               "name": "nuke",
               "hidden": true,
               "deprecated": {"replacement": "destroy"},
-              "intent": {"kind": "write"},
+              "intent": {
+                "destructive": true,
+                "idempotent": false,
+                "scope": "global",
+                "requiresConfirmation": true,
+                "requiresAuth": true
+              },
               "output": {"formats": ["json"]},
               "streaming": true,
               "usage": "t nuke <x>",
@@ -644,6 +724,8 @@ fn cli_schema_annotations_and_dropped_fields() {
                 {"role": "flag", "name": "older", "type": "boolean", "deprecated": {}}
               ]
             },
+            {"name": "vague", "intent": {"kind": "write"}},
+            {"name": "noise", "intent": "not-an-object"},
             {"name": "gone", "deprecated": {"message": "removed"}},
             {"deprecated": true},
             "stray"
@@ -652,24 +734,38 @@ fn cli_schema_annotations_and_dropped_fields() {
         }"#,
     )
     .unwrap();
-    // Agent-facing root fields the IR cannot hold are warned about —
-    // `x-` extensions pass silently.
+    // `environment` is consumed into `about` annotations — agent-facing
+    // root fields the IR cannot hold are still warned about, and `x-`
+    // extensions pass silently.
     assert!(
         f.warnings
             .iter()
-            .any(|w| w.contains("unsupported root fields dropped: environment, requiresAuth")),
+            .any(|w| w.contains("unsupported root fields dropped: requiresAuth")),
         "{:?}",
         f.warnings
     );
     assert!(!f.warnings.iter().any(|w| w.contains("x-custom")));
+    assert_eq!(
+        f.spec.about.as_deref(),
+        Some("[env: T_TOKEN (required), T_DEBUG] [config: ~/.trc (required), ~/.t.toml]")
+    );
     let nuke = &f.spec.root.commands["nuke"];
     assert_eq!(
         nuke.about.as_deref(),
-        Some("[hidden] [deprecated: use `destroy`]")
+        Some(
+            "[hidden] [deprecated: use `destroy`] [intent: destructive, requires auth, requires confirmation, scope: global]"
+        )
     );
+    // Unrecognized intent shapes fold in generically; a non-object
+    // `intent` yields nothing at all.
+    assert_eq!(
+        f.spec.root.commands["vague"].about.as_deref(),
+        Some("[intent: kind: write]")
+    );
+    assert!(f.spec.root.commands["noise"].about.is_none());
     assert!(
         f.warnings.iter().any(|w| w.contains(
-            "unsupported command `nuke` fields dropped: intent, output, streaming, usage"
+            "unsupported command `nuke` fields dropped: output, streaming, usage"
         )),
         "{:?}",
         f.warnings

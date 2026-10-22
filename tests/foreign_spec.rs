@@ -72,11 +72,12 @@ fn fig_spec_loads_through_the_backend() {
         clone.arg_descriptors,
         vec!["pos:repository", "pos:directory", "rest:extra_args"]
     );
-    // The `generators` field on the variadic arg did not map.
+    // The `generators` field on the variadic arg degrades to a
+    // `generator:` doc annotation — nothing drops with a warning.
     assert!(
-        m.diagnostics
+        !m.diagnostics
             .iter()
-            .any(|d| d.contains("unsupported arg #3 fields dropped: generators")),
+            .any(|d| d.contains("generators")),
         "{:?}",
         m.diagnostics
     );
@@ -225,13 +226,14 @@ fn foreign_spec_emit_spec_round_trip() {
     let spec = CliSpec::load(&out).unwrap();
     assert_eq!(spec.name, "gh");
     assert!(spec.root.commands["pr"].commands.contains_key("list"));
+    let rest = spec.root.commands["repo"].commands["clone"]
+        .rest
+        .as_ref()
+        .unwrap();
+    assert_eq!(rest.name, "extra_args");
     assert_eq!(
-        spec.root.commands["repo"].commands["clone"]
-            .rest
-            .as_ref()
-            .unwrap()
-            .name,
-        "extra_args"
+        rest.doc.as_deref(),
+        Some("Additional git clone flags [optional] [generator: filepaths]")
     );
 }
 

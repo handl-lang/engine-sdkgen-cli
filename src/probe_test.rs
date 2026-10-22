@@ -309,14 +309,12 @@ fn fixture(name: &str) -> String {
 const LEAF_HELP: &str = "Usage: git x <n>\n\nFlags:\n  -f   force\n";
 
 #[test]
-fn promoted_concept_topics_that_fail_to_probe_are_dropped() {
-    // A `git help -a`-shaped page: `annotate`/`blame` and the concept
-    // topics `namespaces`/`protocol-v2` all arrive via loose-block
-    // promotion, indistinguishable at parse time. The probe separates
-    // them — `git namespaces --help` fails on every candidate because
-    // the name is a `git help <topic>` page, not an argv word — so
-    // promoted children that do not probe are removed; table- and
-    // probe-proven children stay.
+fn documentation_section_topics_never_become_subcommands() {
+    // A `git help -a`-shaped page: `annotate`/`blame` arrive via
+    // loose-block promotion and probe fine — they are real argv words.
+    // The `Manual topics` section (`namespaces`, `protocol-v2` — `git
+    // help <topic>` pages) is a known documentation header, so its
+    // rows are suppressed at parse time and never probed at all.
     let root = fixture("git-help-concepts.txt");
     let run = canned(&[
         (&["--help"], Ok(root.as_str())),
@@ -331,18 +329,43 @@ fn promoted_concept_topics_that_fail_to_probe_are_dropped() {
     }
     for gone in ["namespaces", "protocol-v2"] {
         assert!(!r.commands.contains_key(gone), "{gone} survived");
-        assert!(
-            r.diagnostics
-                .iter()
-                .any(|d| d.contains(&format!("dropped `{gone}`"))),
-            "{:?}",
-            r.diagnostics
-        );
     }
-    // The only remaining diagnostics are the failed topic probes, the
-    // drop notes, and the fake `… and options` section — `medium`
-    // because the page has no usage line.
+    // The only diagnostics are the suppressed topic section and the
+    // fake `… and options` section — `medium` because the page has no
+    // usage line.
+    assert!(
+        r.diagnostics
+            .iter()
+            .any(|d| d.contains("unrecognized section `Manual topics`")),
+        "{:?}",
+        r.diagnostics
+    );
     assert_eq!(r.confidence, "medium");
+}
+
+#[test]
+fn promoted_rows_under_unknown_headers_are_pruned_when_probe_fails() {
+    // Promotion suppression only covers *known* documentation
+    // headers — a loose block under any other name still promotes,
+    // and the probe is the backstop: children that fail every help
+    // candidate are dropped as concept-topic leaks.
+    let root = "Usage: t <cmd>\n\nweird head\n  real   real cmd\n  fake   a topic\n\nCommands:\n  listed  a table row\n";
+    let run = canned(&[
+        (&["--help"], Ok(root)),
+        (&["real", "--help"], Ok(LEAF_HELP)),
+        (&["listed", "--help"], Ok(LEAF_HELP)),
+    ]);
+    let r = probe_tool("t", &ProbePlan::default(), &run);
+    assert!(r.commands.contains_key("real"), "{:?}", r.commands);
+    assert!(r.commands.contains_key("listed"), "{:?}", r.commands);
+    assert!(!r.commands.contains_key("fake"), "{:?}", r.commands);
+    assert!(
+        r.diagnostics
+            .iter()
+            .any(|d| d.contains("dropped `fake`")),
+        "{:?}",
+        r.diagnostics
+    );
 }
 
 #[test]

@@ -577,14 +577,16 @@ fn kubectl_grouped_usage_and_blank_separated_options() {
 }
 
 #[test]
-fn kubectl_get_alternation_groups_do_not_leak_positionals() {
-    // Real `kubectl get --help`: `[(-o|--output=)json|yaml|…]` and
-    // `(TYPE[.VERSION][.GROUP] [NAME | -l label] | TYPE/NAME …)` are
-    // grouped alternations — skipping them whole is what stops `f`,
-    // `l`, `label`, `type_version_group_name` leaking as positionals.
+fn kubectl_get_alternation_groups_flatten_to_a_named_rest() {
+    // Real `kubectl get --help`: `[(-o|--output=)json|yaml|…]` is a
+    // single-token option-value choice — skipped whole, so `f`, `l`,
+    // `label` never leak as positionals. `(TYPE[.VERSION][.GROUP]
+    // [NAME | -l label] | TYPE/NAME …)` is a genuine alternation whose
+    // second alternative is all-positional — it flattens to a
+    // `type_version_group_name` rest arg with a warning.
     let p = parse_help(&fixture("kubectl-get.txt"), 2);
     assert!(p.positionals.is_empty(), "{:?}", p.positionals);
-    assert!(p.rest.is_none());
+    assert_eq!(p.rest.as_ref().unwrap().name, "type_version_group_name");
     let kinds: BTreeMap<&str, &str> = p
         .options
         .iter()
@@ -612,13 +614,22 @@ fn kubectl_get_alternation_groups_do_not_leak_positionals() {
 }
 
 #[test]
-fn kubectl_set_resources_paren_groups_are_skipped() {
+fn kubectl_set_resources_alternation_flattens_conjunction_skips() {
     // Real `kubectl set resources --help`: `(-f FILENAME | TYPE NAME)`
-    // plus a never-closed `([--limits=… & --requests=…]` group — the
-    // whole tail is alternation-shaped and yields no positionals.
+    // is a mixed alternation — it flattens to a `type` rest arg (the
+    // `TYPE NAME` pair reads as a type list). The never-closed
+    // `([--limits=… & --requests=…]` group is a conjunction, not an
+    // alternation — still skipped with the group warning.
     let p = parse_help(&fixture("kubectl-set-resources.txt"), 3);
     assert!(p.positionals.is_empty(), "{:?}", p.positionals);
-    assert!(p.rest.is_none());
+    assert_eq!(p.rest.as_ref().unwrap().name, "type");
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("flattened") && w.contains("`type`")),
+        "{:?}",
+        p.warnings
+    );
     let kinds: BTreeMap<&str, &str> = p
         .options
         .iter()
@@ -786,8 +797,9 @@ fn usage_quoted_option_values_stay_single_tokens() {
 
 #[test]
 fn usage_paren_group_and_assignments_and_punct_tokens() {
-    // `(-f F | TYPE NAME)` alternation skipped wholesale; `KEY=VAL`
-    // names its left side; `*`/`?`/`)` cannot name a positional.
+    // `(-f F | -l L)` is a flag-only alternation — flattened to a rest
+    // named after the first flag's metavar (`f`). `KEY=VAL` names its
+    // left side; `*`/`?`/`)` cannot name a positional.
     let p = parse_help("usage: t (-f F | -l L) KEY_1=VAL_1 * ? ] [\n", 1);
     assert_eq!(
         p.positionals,
@@ -799,11 +811,118 @@ fn usage_paren_group_and_assignments_and_punct_tokens() {
         "{:?}",
         p.positionals
     );
+    assert_eq!(p.rest.as_ref().unwrap().name, "f");
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("alternation `(-f F | -l L)` flattened")),
+        "{:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn all_positional_alternation_emits_alternative_zero() {
+    // `kubectl rollout undo (TYPE NAME | TYPE/NAME)` — both shapes
+    // name the same argv slot; alternative[0]'s tokens become
+    // positionals without a warning.
+    let p = parse_help("usage: t (TYPE NAME | TYPE/NAME) [flags]\n", 1);
+    let names: Vec<&str> = p.positionals.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names, ["type", "name"], "{names:?}");
+    assert!(p.rest.is_none());
+    assert!(
+        !p.warnings.iter().any(|w| w.contains("alternation")),
+        "{:?}",
+        p.warnings
+    );
+
+    // `kubectl create secret (docker-registry | generic | tls)` — a
+    // one-word alternative still emits alternative[0]'s word.
+    let p = parse_help("usage: t (docker-registry | generic | tls) [options]\n", 1);
+    assert_eq!(p.positionals[0].name, "docker_registry");
+}
+
+#[test]
+fn alternation_variadic_and_rest_taken_fallback() {
+    // `(A B ... | C)` — the bare `...` makes alternative[0]'s last
+    // word the variadic tail.
+    let p = parse_help("usage: t (A B ... | C)\n", 1);
+    assert_eq!(p.positionals[0].name, "a");
+    assert_eq!(p.rest.as_ref().unwrap().name, "b");
+    // `(A B... | C)` — `...` fused to the token does the same.
+    let p = parse_help("usage: t (A B... | C)\n", 1);
+    assert_eq!(p.positionals[0].name, "a");
+    assert_eq!(p.rest.as_ref().unwrap().name, "b");
+
+    // A group whose flattened tail has nowhere to go — `rest` is
+    // already taken — lands as a positional and the warning says so.
+    let p = parse_help("usage: t files... (x... | -g G)\n", 1);
+    let names: Vec<&str> = p.positionals.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names, ["x"], "{names:?}");
+    assert_eq!(p.rest.as_ref().unwrap().name, "files");
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("flattened to a positional argument `x`")),
+        "{:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn alternation_rest_name_fallbacks() {
+    // Positional-led but flag-bearing alternative — `TYPE` names it.
+    let p = parse_help("usage: t (TYPE [(NAME | -l label)] | -f FILE)\n", 1);
+    assert_eq!(p.rest.as_ref().unwrap().name, "type");
+
+    // All-flag alternatives — the first flag's metavar names it
+    // (kubectl apply's `(-f FILENAME | -k DIRECTORY)`).
+    let p = parse_help("usage: t (-f FILENAME | -k DIRECTORY)\n", 1);
+    assert_eq!(p.rest.as_ref().unwrap().name, "filename");
+
+    // A `--flag=VALUE` spelling yields its own metavar.
+    let p = parse_help("usage: t (--opt=VAL | -f F)\n", 1);
+    assert_eq!(p.rest.as_ref().unwrap().name, "val");
+
+    // Nothing nameable at all → `args`.
+    let p = parse_help("usage: t (-f | -l)\n", 1);
+    assert_eq!(p.rest.as_ref().unwrap().name, "args");
+
+    // A marker word (`args`) can't name the tail — the flag metavar
+    // fallback still names it.
+    let p = parse_help("usage: t (args | -f F)\n", 1);
+    assert_eq!(p.rest.as_ref().unwrap().name, "f");
+}
+
+#[test]
+fn alternation_edge_tokens() {
+    // A leading `|` yields an empty alternative — dropped; the rest
+    // of the group still flattens.
+    let p = parse_help("usage: t (| A | -f F)\n", 1);
+    assert_eq!(p.rest.as_ref().unwrap().name, "a");
+
+    // An alternation left open at end-of-line is analyzed anyway.
+    let p = parse_help("usage: t (-f F | TYPE NAME\n", 1);
+    assert_eq!(p.rest.as_ref().unwrap().name, "type");
+
+    // A `(`-group with no top-level `|` is a conjunction, not an
+    // alternation — counted as skipped, nothing emitted.
+    let p = parse_help("usage: t (-f F & -l L)\n", 1);
+    assert!(p.positionals.is_empty() && p.rest.is_none());
     assert!(
         p.warnings.iter().any(|w| w.contains("alternation groups")),
         "{:?}",
         p.warnings
     );
+
+    // `(` and `)` as freestanding tokens strip to nothing; a
+    // punctuation token inside an all-positional alternative names
+    // nothing and is dropped from its positional list.
+    let p = parse_help("usage: t ( A * | -f F )\n", 1);
+    assert_eq!(p.rest.as_ref().unwrap().name, "a");
+    let p = parse_help("usage: t (A * | B C)\n", 1);
+    let names: Vec<&str> = p.positionals.iter().map(|x| x.name.as_str()).collect();
+    assert_eq!(names, ["a"], "{names:?}");
 }
 
 #[test]
@@ -973,26 +1092,17 @@ fn repeatable_inference_does_not_steal_bool_or_int_rows() {
 #[test]
 fn promoted_provenance_tracks_loose_blocks_only() {
     // `git help -a`-shaped page: `Main Porcelain Commands` is a real
-    // commands table; `Ancillary Commands / Interrogators` and `Manual
-    // topics` are loose blocks whose rows promote. The `User-facing
-    // file system, commands and options` head lands in an *options*
-    // section — its rows never become commands at all (and the empty
-    // section warns).
+    // commands table; `Ancillary Commands / Interrogators` is a loose
+    // block whose rows promote. `Manual topics` is a documentation
+    // section — its `namespaces`/`protocol-v2` rows name `git help
+    // <topic>` pages, so they never become subcommands at all. The
+    // `User-facing file system, commands and options` head lands in an
+    // *options* section — its rows never become commands either (and
+    // the empty section warns).
     let p = parse_help(&fixture("git-help-concepts.txt"), 1);
     let subs: Vec<&str> = p.subcommands.iter().map(|(n, _)| n.as_str()).collect();
-    assert_eq!(
-        subs,
-        [
-            "add",
-            "checkout",
-            "annotate",
-            "blame",
-            "namespaces",
-            "protocol-v2"
-        ],
-        "{subs:?}"
-    );
-    for topic in ["annotate", "blame", "namespaces", "protocol-v2"] {
+    assert_eq!(subs, ["add", "checkout", "annotate", "blame"], "{subs:?}");
+    for topic in ["annotate", "blame"] {
         assert!(p.promoted.contains(topic), "{topic} not marked promoted");
     }
     assert!(!p.promoted.contains("add"));
@@ -1004,6 +1114,35 @@ fn promoted_provenance_tracks_loose_blocks_only() {
         "{:?}",
         p.warnings
     );
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("unrecognized section `Manual topics` carried 2")),
+        "{:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn documentation_section_headers_do_not_promote() {
+    // `The Git concept guides are:` (git help -g) and the unindented
+    // `User-facing repository, command and file interfaces` (git help
+    // -a) head documentation lists — command-shaped rows stay rows,
+    // never subcommands, whether the header carries a colon or not.
+    let text = "usage: t\n\nThe Git concept guides are:\n   tutorial   A tutorial\n   everyday   Everyday use\n\nUser-facing repository, command and file interfaces\n   attributes   Defining attributes\n   ignore   Untracked files\n";
+    let p = parse_help(text, 1);
+    assert!(p.subcommands.is_empty(), "{:?}", p.subcommands);
+    assert!(p.promoted.is_empty(), "{:?}", p.promoted);
+    for want in [
+        "unrecognized section `The Git concept guides are` carried 2",
+        "unrecognized section `User-facing repository, command and file interfaces` carried 2",
+    ] {
+        assert!(
+            p.warnings.iter().any(|w| w.contains(want)),
+            "missing `{want}`: {:?}",
+            p.warnings
+        );
+    }
 }
 
 #[test]
