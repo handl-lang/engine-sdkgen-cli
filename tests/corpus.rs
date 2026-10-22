@@ -130,3 +130,32 @@ fn top_level_or_line_and_unindented_usage_candidate() {
     assert!(p.has_usage);
     assert_eq!(p.options.len(), 1);
 }
+
+#[test]
+fn kubectl_cronjob_parses_to_high_confidence() {
+    let p = parse_help(&fixture("kubectl-create-cronjob.txt"), 3);
+    assert_eq!(p.positionals.len(), 1);
+    assert_eq!(p.positionals[0].name, "name");
+    assert_eq!(p.options.len(), 11);
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+    assert_eq!(p.confidence(), "high");
+}
+
+#[test]
+fn git_prose_headers_yield_the_command_list() {
+    let p = parse_help(&fixture("git-help.txt"), 1);
+    assert_eq!(p.subcommands.len(), 24);
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+    assert_eq!(p.confidence(), "high");
+}
+
+#[test]
+fn aws_man_page_is_medium_confidence_with_options_and_services() {
+    let p = parse_help(&fixture("aws-help.txt"), 1);
+    assert!(p.has_usage);
+    assert!(p.options.len() >= 15, "{}", p.options.len());
+    assert!(!p.subcommands.is_empty());
+    // The `Description` prose block still reports its table-shaped
+    // rows — man pages stay medium, not silently high.
+    assert_eq!(p.confidence(), "medium");
+}

@@ -279,3 +279,48 @@ fn help_candidates_order_and_dedup() {
     assert_eq!(help_candidates("--help"), ["--help", "-h", "help", ""]);
     assert_eq!(help_candidates("-h"), ["-h", "--help", "help", ""]);
 }
+
+#[test]
+fn error_banner_pages_fall_through_to_the_help_candidate() {
+    // aws-style: `--help` and `-h` answer a `[ERROR]` banner + usage
+    // (usable-looking but bogus) — the probe must keep walking to
+    // `help`, which yields the man-page command list.
+    let run = canned(&[
+        (
+            &["--help"],
+            Ok(
+                "aws: [ERROR]: An error occurred (ParamValidation): the following arguments are required: command\n\nusage: aws [options] <command> <subcommand> [parameters]\n",
+            ),
+        ),
+        (
+            &["-h"],
+            Ok(
+                "aws: [ERROR]: An error occurred (ParamValidation): the following arguments are required: command\n",
+            ),
+        ),
+        (
+            &["help"],
+            Ok(
+                "Synopsis\n        aws [options] <command> [parameters]\n\nGlobal Options\n     --debug (boolean)   debug logging\n\nAvailable Services\n     * s3\n     * ec2\n",
+            ),
+        ),
+        (&["s3", "--help"], Err("no page")),
+        (&["s3", "-h"], Err("no page")),
+        (&["s3", "help"], Err("no page")),
+        (&["s3"], Err("no page")),
+        (&["ec2", "--help"], Err("no page")),
+        (&["ec2", "-h"], Err("no page")),
+        (&["ec2", "help"], Err("no page")),
+        (&["ec2"], Err("no page")),
+    ]);
+    let r = probe_tool("aws", &ProbePlan::default(), &run);
+    assert!(r.commands.contains_key("s3"), "{:?}", r.commands);
+    assert!(r.commands.contains_key("ec2"), "{:?}", r.commands);
+    assert!(r.root.options.contains_key("debug"), "{:?}", r.root.options);
+    assert_eq!(r.root.options["debug"].kind, "flag");
+    assert!(
+        r.diagnostics.iter().any(|d| d.contains("`help`")),
+        "{:?}",
+        r.diagnostics
+    );
+}

@@ -1,0 +1,160 @@
+[4maws[24m()                                                                      [4maws[24m()
+
+[1mName[0m
+     aws -
+
+[1mDescription[0m
+     The  AWS  Command  Line Interface is a unified tool to manage your AWS ser-
+     vices.
+
+[1mSynopsis[0m
+        aws [options] <command> <subcommand> [parameters]
+
+     Use [4maws[24m [4mcommand[24m [4mhelp[24m for information on a specific command.  Use  [4maws[24m  [4mhelp[0m
+     [4mtopics[24m  to view a list of available help topics. The synopsis for each com-
+     mand shows its parameters and their usage. Optional parameters are shown in
+     square brackets.
+
+[1mGlobal Options[0m
+     [1m--debug [22m(boolean)
+
+     Turn on debug logging.
+
+     [1m--endpoint-url [22m(string)
+
+     Override command's default URL with the given URL.
+
+     [1m--no-verify-ssl [22m(boolean)
+
+     By default, the AWS CLI uses SSL when communicating with AWS services.  For
+     each  SSL connection, the AWS CLI will verify SSL certificates. This option
+     overrides the default behavior of verifying SSL certificates.
+
+     [1m--no-paginate [22m(boolean)
+
+     Disable automatic pagination. If automatic pagination is disabled, the  AWS
+     CLI will only make one call, for the first page of results.
+
+     [1m--output [22m(string)
+
+     The formatting style for command output.
+
+     * json
+
+     * text
+
+     * table
+
+     * yaml
+
+     * yaml-stream
+
+     * off
+
+     [1m--query [22m(string)
+
+     A JMESPath query to use in filtering the response data.
+
+     [1m--profile [22m(string)
+
+     Use a specific profile from your credential file.
+
+     [1m--region [22m(string)
+
+     The region to use. Overrides config/env settings.
+
+     [1m--version [22m(string)
+
+     Display the version of this tool.
+
+     [1m--color [22m(string)
+
+     Turn on/off color output.
+
+     * on
+
+     * off
+
+     * auto
+
+     [1m--no-sign-request [22m(boolean)
+
+     Do  not  sign  requests. Credentials will not be loaded if this argument is
+     provided.
+
+     [1m--ca-bundle [22m(string)
+
+     The CA certificate bundle to use when verifying SSL certificates. Overrides
+     config/env settings.
+
+     [1m--cli-read-timeout [22m(int)
+
+     The maximum socket read time in seconds. If the value  is  set  to  0,  the
+     socket  read will be blocking and not timeout. The default value is 60 sec-
+     onds.
+
+     [1m--cli-connect-timeout [22m(int)
+
+     The maximum socket connect time in seconds. If the value is set to  0,  the
+     socket  connect  will  be blocking and not timeout. The default value is 60
+     seconds.
+
+     [1m--cli-binary-format [22m(string)
+
+     The formatting style to be used for binary blobs.  The  default  format  is
+     base64.  The  base64 format expects binary blobs to be provided as a base64
+     encoded string. The raw-in-base64-out format preserves  compatibility  with
+     AWS  CLI  V1 behavior and binary values must be passed literally. When pro-
+     viding contents from a file that map to a binary blob [1mfileb:// [22mwill  always
+     be  treated  as binary and use the file contents directly regardless of the
+     [1mcli-binary-format [22msetting. When using [1mfile:// [22mthe file contents  will  need
+     to properly formatted for the configured [1mcli-binary-format[22m.
+
+     * base64
+
+     * raw-in-base64-out
+
+     [1m--no-cli-pager [22m(boolean)
+
+     Disable cli pager for output.
+
+     [1m--cli-auto-prompt [22m(boolean)
+
+     Automatically prompt for CLI input parameters.
+
+     [1m--no-cli-auto-prompt [22m(boolean)
+
+     Disable automatically prompt for CLI input parameters.
+
+     [1m--cli-error-format [22m(string)
+
+     The  formatting style for error output. By default, errors are displayed in
+     enhanced format.
+
+     * legacy
+
+     * json
+
+     * yaml
+
+     * text
+
+     * table
+
+     * enhanced
+
+[1mAvailable Services[0m
+     * accessanalyzer
+
+     * account
+
+     * acm
+
+     * acm-pca
+
+     * aiops
+
+     * amp
+
+     * amplify
+

@@ -1,4 +1,5 @@
 use super::help::*;
+use std::collections::BTreeMap;
 
 fn fixture(name: &str) -> String {
     let path = format!("{}/tests/fixtures/help/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -529,4 +530,384 @@ fn error_output_is_not_help_text() {
     assert!(!parse_help(text2, 1).is_usable());
     let text3 = "error: bad input\n\nUsage: t\n\nOptions:\n  -x   x\n";
     assert!(!parse_help(text3, 1).is_usable());
+}
+
+#[test]
+fn kubectl_grouped_usage_and_blank_separated_options() {
+    // Real `kubectl create cronjob --help`: the usage line mixes
+    // `NAME` with `--image=image`, a quoted `--schedule='0/5 * * * ?'`,
+    // and a `-- [COMMAND] [args...]` tail — only `name` is a
+    // positional. The `Options:` table blank-separates every row from
+    // its description paragraph; all rows still parse, and
+    // `=false`-style defaults read as `flag` kind.
+    let p = parse_help(&fixture("kubectl-create-cronjob.txt"), 3);
+    assert_eq!(
+        p.positionals,
+        vec![ParsedPositional {
+            name: "name".into(),
+            variadic: false,
+            doc: None
+        }],
+        "{:?}",
+        p.positionals
+    );
+    assert!(p.rest.is_none());
+    let kinds: BTreeMap<&str, &str> = p
+        .options
+        .iter()
+        .map(|o| (o.name.as_str(), o.kind.as_str()))
+        .collect();
+    assert_eq!(kinds["image"], "string");
+    assert_eq!(kinds["schedule"], "string");
+    assert_eq!(kinds["restart"], "string");
+    assert_eq!(kinds["dry_run"], "string");
+    assert_eq!(kinds["output"], "string");
+    assert_eq!(kinds["allow_missing_template_keys"], "flag");
+    assert_eq!(kinds["save_config"], "flag");
+    assert_eq!(kinds["show_managed_fields"], "flag");
+    assert_eq!(p.options.len(), 11, "{:?}", p.options);
+    assert_eq!(
+        p.options.iter().find(|o| o.name == "output").unwrap().flag,
+        "--output"
+    );
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+    assert_eq!(p.confidence(), "high");
+}
+
+#[test]
+fn kubectl_get_alternation_groups_do_not_leak_positionals() {
+    // Real `kubectl get --help`: `[(-o|--output=)json|yaml|…]` and
+    // `(TYPE[.VERSION][.GROUP] [NAME | -l label] | TYPE/NAME …)` are
+    // grouped alternations — skipping them whole is what stops `f`,
+    // `l`, `label`, `type_version_group_name` leaking as positionals.
+    let p = parse_help(&fixture("kubectl-get.txt"), 2);
+    assert!(p.positionals.is_empty(), "{:?}", p.positionals);
+    assert!(p.rest.is_none());
+    let kinds: BTreeMap<&str, &str> = p
+        .options
+        .iter()
+        .map(|o| (o.name.as_str(), o.kind.as_str()))
+        .collect();
+    assert_eq!(kinds["output"], "string");
+    assert_eq!(kinds["selector"], "string");
+    assert_eq!(kinds["field_selector"], "string");
+    assert_eq!(kinds["filename"], "string");
+    assert_eq!(kinds["chunk_size"], "int");
+    assert_eq!(kinds["watch"], "flag");
+    assert_eq!(kinds["all_namespaces"], "flag");
+    assert_eq!(kinds["no_headers"], "flag");
+    assert_eq!(kinds["server_print"], "flag");
+    assert_eq!(p.options.len(), 23, "{:?}", p.options);
+    assert!(
+        p.warnings.iter().any(|w| w.contains("alternation groups")),
+        "{:?}",
+        p.warnings
+    );
+    assert_eq!(p.confidence(), "medium");
+}
+
+#[test]
+fn kubectl_set_resources_paren_groups_are_skipped() {
+    // Real `kubectl set resources --help`: `(-f FILENAME | TYPE NAME)`
+    // plus a never-closed `([--limits=… & --requests=…]` group — the
+    // whole tail is alternation-shaped and yields no positionals.
+    let p = parse_help(&fixture("kubectl-set-resources.txt"), 3);
+    assert!(p.positionals.is_empty(), "{:?}", p.positionals);
+    assert!(p.rest.is_none());
+    let kinds: BTreeMap<&str, &str> = p
+        .options
+        .iter()
+        .map(|o| (o.name.as_str(), o.kind.as_str()))
+        .collect();
+    assert_eq!(kinds["limits"], "string");
+    assert_eq!(kinds["requests"], "string");
+    assert_eq!(kinds["containers"], "string");
+    assert_eq!(kinds["filename"], "string");
+    assert_eq!(kinds["local"], "flag");
+    assert_eq!(kinds["all"], "flag");
+    assert!(
+        p.warnings.iter().any(|w| w.contains("alternation groups")),
+        "{:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn kubectl_bool_default_metavars_are_flags() {
+    // Real `kubectl version --help`: `--client=false:` is a boolean
+    // flag with a printed default, not a `string` option.
+    let p = parse_help(&fixture("kubectl-version.txt"), 2);
+    assert_eq!(p.options.len(), 2, "{:?}", p.options);
+    let client = p.options.iter().find(|o| o.name == "client").unwrap();
+    assert_eq!(client.flag, "--client");
+    assert_eq!(client.kind, "flag");
+    assert_eq!(
+        p.options.iter().find(|o| o.name == "output").unwrap().kind,
+        "string"
+    );
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+}
+
+#[test]
+fn git_prose_command_sections_promote_to_subcommands() {
+    // Real `git --help`: `start a working area (see also: …)` and
+    // friends are prose headers — their indented `name   desc` rows
+    // are command-shaped, so each block becomes a command list.
+    let p = parse_help(&fixture("git-help.txt"), 1);
+    let subs: Vec<&str> = p.subcommands.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(subs.len(), 24, "{subs:?}");
+    for want in [
+        "clone", "init", "add", "commit", "fetch", "pull", "push", "tag",
+    ] {
+        assert!(subs.contains(&want), "{want} missing from {subs:?}");
+    }
+    assert_eq!(
+        p.subcommands.iter().find(|(n, _)| n == "clone").unwrap().1,
+        "Clone a repository into a new directory"
+    );
+    assert!(p.positionals.is_empty());
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+    assert_eq!(p.confidence(), "high");
+    assert!(p.is_usable());
+}
+
+#[test]
+fn git_help_a_recognized_and_prose_sections_merge() {
+    // `git help -a` mixes `… Commands` headers (recognized) with
+    // `Ancillary Commands / Manipulators`-style prose headers
+    // (promoted) and bare-name rows under `External commands`.
+    let p = parse_help(&fixture("git-help-a.txt"), 1);
+    let subs: Vec<&str> = p.subcommands.iter().map(|(n, _)| n.as_str()).collect();
+    for want in [
+        "add",
+        "checkout",
+        "config",
+        "reflog",
+        "annotate",
+        "fsck",
+        "credential-gcloud.sh",
+        "filter-repo",
+    ] {
+        assert!(subs.contains(&want), "{want} missing from {subs:?}");
+    }
+    assert_eq!(subs.len(), 27, "{subs:?}");
+    assert_eq!(
+        p.subcommands.iter().find(|(n, _)| n == "reflog").unwrap().1,
+        "Manage reflog information"
+    );
+    // No usage line — `help -a` is a table listing, not a help page.
+    assert!(!p.has_usage);
+    assert_eq!(p.confidence(), "medium");
+}
+
+#[test]
+fn aws_man_page_parses_synopsis_options_and_service_bullets() {
+    // Real `aws help`: groff man output — SGR escapes, `SYNOPSIS`
+    // usage, `Global Options` as `--flag (type)` rows blank-separated
+    // from their paragraphs, `* <svc>` bullets under `Available
+    // Services`.
+    let p = parse_help(&fixture("aws-help.txt"), 1);
+    assert!(p.has_usage);
+    let kinds: BTreeMap<&str, &str> = p
+        .options
+        .iter()
+        .map(|o| (o.name.as_str(), o.kind.as_str()))
+        .collect();
+    assert_eq!(kinds["debug"], "flag");
+    assert_eq!(kinds["no_verify_ssl"], "flag");
+    assert_eq!(kinds["endpoint_url"], "string");
+    assert_eq!(kinds["region"], "string");
+    assert_eq!(kinds["cli_read_timeout"], "int");
+    assert_eq!(kinds["cli_connect_timeout"], "int");
+    let subs: Vec<&str> = p.subcommands.iter().map(|(n, _)| n.as_str()).collect();
+    for want in ["accessanalyzer", "acm", "acm-pca", "amplify"] {
+        assert!(subs.contains(&want), "{want} missing from {subs:?}");
+    }
+    // `* json`-style value bullets under `--output` stay inside the
+    // options section — they never become subcommands.
+    assert!(!subs.contains(&"json"), "{subs:?}");
+    assert_eq!(p.confidence(), "medium");
+}
+
+#[test]
+fn aws_error_page_is_rejected_as_error_output() {
+    // `aws --help` answers a ParamValidation error banner + usage —
+    // usable-looking but bogus; the probe must fall through to `help`.
+    let text = "aws: [ERROR]: An error occurred (ParamValidation): the following arguments are required: command\n\nusage: aws [options] <command> <subcommand> [parameters]\n";
+    let p = parse_help(text, 1);
+    assert!(!p.is_usable());
+    assert!(p.warnings[0].contains("[ERROR]"));
+}
+
+#[test]
+fn synopsis_header_leads_a_usage_block() {
+    let text = "Name\n     t -\n\nSynopsis\n        t [options] <file> [parameters]\n\nOptions\n  --x  x\n";
+    let p = parse_help(text, 1);
+    assert!(p.has_usage);
+    // `<file>` is a positional; `[options]`/`[parameters]` are markers.
+    assert_eq!(p.positionals.len(), 1);
+    assert_eq!(p.positionals[0].name, "file");
+    assert_eq!(p.options.len(), 1);
+}
+
+#[test]
+fn ansi_escapes_are_stripped_before_parsing() {
+    let text = "\u{1b}[1mOptions\u{1b}[0m\n  \u{1b}[1m--debug \u{1b}[22m(boolean)\n\nCommands:\n  run  go\n";
+    let p = parse_help(text, 1);
+    assert_eq!(p.options.len(), 1, "{:?}", p.warnings);
+    assert_eq!(p.options[0].flag, "--debug");
+    assert_eq!(p.options[0].kind, "flag");
+    assert_eq!(p.subcommands.len(), 1);
+}
+
+#[test]
+fn usage_quoted_option_values_stay_single_tokens() {
+    // `--schedule='0/5 * * * ?'` is one option token — the quoted `*`
+    // and `?` words must not leak as `''` positionals.
+    let p = parse_help(
+        "usage: t NAME --image=x --schedule='0/5 * * * ?' -- [args...]\n",
+        1,
+    );
+    assert_eq!(
+        p.positionals,
+        vec![ParsedPositional {
+            name: "name".into(),
+            variadic: false,
+            doc: None
+        }]
+    );
+    assert!(p.rest.is_none());
+}
+
+#[test]
+fn usage_paren_group_and_assignments_and_punct_tokens() {
+    // `(-f F | TYPE NAME)` alternation skipped wholesale; `KEY=VAL`
+    // names its left side; `*`/`?`/`)` cannot name a positional.
+    let p = parse_help("usage: t (-f F | -l L) KEY_1=VAL_1 * ? ] [\n", 1);
+    assert_eq!(
+        p.positionals,
+        vec![ParsedPositional {
+            name: "key_1".into(),
+            variadic: false,
+            doc: None
+        }],
+        "{:?}",
+        p.positionals
+    );
+    assert!(
+        p.warnings.iter().any(|w| w.contains("alternation groups")),
+        "{:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn options_section_survives_blank_separated_rows() {
+    // kubectl/man-page tables put a blank plus a description
+    // paragraph between rows — the section stays open while the next
+    // non-blank line is indented.
+    let text = "Usage: t\n\nOptions:\n    --a=x:\n\tFirst flag.\n\n    --b=y:\n\tSecond flag.\n\nNext:\n  z\n";
+    let p = parse_help(text, 1);
+    let names: Vec<&str> = p.options.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(names, ["a", "b"], "{names:?}");
+}
+
+#[test]
+fn prose_sections_of_command_rows_promote_only_when_majority() {
+    // Two command-shaped rows out of two → a command list.
+    let p = parse_help(
+        "usage: t\n\nsome prose head\n  aa   does a\n  bb   does b\n",
+        1,
+    );
+    let subs: Vec<&str> = p.subcommands.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(subs, ["aa", "bb"], "{subs:?}");
+
+    // A lone command-shaped row among prose-ish rows stays a stray.
+    let p = parse_help(
+        "usage: t\n\nExamples:\n  t aa   like a command\n  foo bar   an example\n  t bb   another one\n",
+        1,
+    );
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("unrecognized section `Examples` carried 3 table rows")),
+        "{:?}",
+        p.warnings
+    );
+    assert!(p.subcommands.is_empty(), "{:?}", p.subcommands);
+}
+
+#[test]
+fn bullet_rows_promote_and_single_row_blocks_do_not() {
+    // `* name` bullets dominate → subcommands (aws service shape).
+    let text =
+        "usage: t <cmd>\n\nThings available\n  * alpha\n  * beta\n\nSee Also\n  * t help topics\n";
+    let p = parse_help(text, 1);
+    let subs: Vec<&str> = p.subcommands.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(subs, ["alpha", "beta"], "{subs:?}");
+    // The one-row `See Also` block is below the promotion threshold.
+    assert!(
+        p.warnings
+            .iter()
+            .any(|w| w.contains("1 table rows appeared outside a recognized section")),
+        "{:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn sentence_lines_are_not_section_headers() {
+    // `Use "kubectl options" for a list ….` is a sentence, not an
+    // options header — it must not spawn an empty options section.
+    let text = "Usage: t\n\nOptions:\n  --a   a\n\nUse \"t options\" for a list of global command-line options (applies to all commands).\n";
+    let p = parse_help(text, 1);
+    assert!(p.warnings.is_empty(), "{:?}", p.warnings);
+    assert_eq!(p.options.len(), 1);
+}
+
+#[test]
+fn bool_and_numeric_metavars_map_kinds() {
+    let text = "Options:\n  --flag=false:   on/off\n  --sw (boolean)    switch\n  --n=42:           count\n  --depth <n>       deep\n";
+    let p = parse_help(text, 1);
+    let kinds: BTreeMap<&str, &str> = p
+        .options
+        .iter()
+        .map(|o| (o.name.as_str(), o.kind.as_str()))
+        .collect();
+    assert_eq!(kinds["flag"], "flag");
+    assert_eq!(kinds["sw"], "flag");
+    assert_eq!(kinds["n"], "int");
+    assert_eq!(kinds["depth"], "int");
+}
+
+#[test]
+fn runs_of_blank_lines_inside_a_section_are_tolerated() {
+    // Multiple blanks in a row between rows keep the section alive the
+    // same way one does.
+    let text =
+        "Usage: t\n\nOptions:\n  --a=x:\n\tdesc a\n\n\n    --b=y:\n\tdesc b\n\n\nTail:\n  z\n";
+    let p = parse_help(text, 1);
+    let names: Vec<&str> = p.options.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(names, ["a", "b"], "{names:?}");
+}
+
+#[test]
+fn kubectl_global_options_page_parses() {
+    // `kubectl options` heads its table `The following options can be
+    // passed to any command:` — the header suffix rule lands it in
+    // Options and every row parses (boolean defaults → flag).
+    let p = parse_help(&fixture("kubectl-options.txt"), 2);
+    assert!(p.options.len() >= 25, "{}", p.options.len());
+    let kinds: BTreeMap<&str, &str> = p
+        .options
+        .iter()
+        .map(|o| (o.name.as_str(), o.kind.as_str()))
+        .collect();
+    assert_eq!(kinds["namespace"], "string");
+    assert_eq!(kinds["server"], "string");
+    assert_eq!(kinds["as"], "string");
+    assert_eq!(kinds["warnings_as_errors"], "flag");
+    // The standalone options page carries no usage line — that is the
+    // only warning.
+    assert_eq!(p.warnings, vec!["no usage line found".to_string()]);
 }
