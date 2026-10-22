@@ -17,11 +17,75 @@
 //!   ~> [String]` — `(prog, subpath, positionals, flag specs, opts
 //!   record-or-null, rest)`. `cli-c` stringifies scalars and expands
 //!   `opts` fields per each spec's `kind`.
+//!
+//! Argument docs (the descriptor's optional trailing `:<doc>`
+//! component — the tool's help-table one-liner) thread through to the
+//! generated SDK docs: the adapter's FlagSpec entries carry a
+//! `doc: "<one-liner>"` string (empty when unknown), and the port's fn
+//! doc comment grows `--- opts:`/`--- args:` tables for the args that
+//! have one.
 
 use handl_language::Language;
 use handl_plugin_sdkgen::{Emitter, SdkgenError, SdkgenModule};
 use std::path::Path;
 use std::sync::Arc;
+
+/// One `opt:<kind>:<name>:<flag>[:<doc>]` descriptor, split into its
+/// components. Kind/name/flag are validated colon-free upstream, so
+/// the optional trailing doc — which *may* contain colons — is simply
+/// everything past the third separator (`splitn`, not `split`).
+struct OptDesc<'a> {
+    kind: &'a str,
+    name: &'a str,
+    flag: &'a str,
+    doc: &'a str,
+}
+
+fn opt_desc<'a>(descriptor: &'a str) -> Option<OptDesc<'a>> {
+    let rest = descriptor.strip_prefix("opt:")?;
+    let mut parts = rest.splitn(4, ':');
+    Some(OptDesc {
+        kind: parts.next()?,
+        name: parts.next()?,
+        flag: parts.next()?,
+        doc: parts.next().unwrap_or(""),
+    })
+}
+
+/// A `pos:<name>[:<doc>]` / `rest:<name>[:<doc>]` descriptor →
+/// `(name, doc)`. Same trailing-doc rule as [`opt_desc`]: the name is
+/// colon-free, the doc is everything past the first separator.
+fn named_arg(descriptor: &str) -> Option<(&str, &str)> {
+    let rest = descriptor
+        .strip_prefix("pos:")
+        .or_else(|| descriptor.strip_prefix("rest:"))?;
+    match rest.split_once(':') {
+        Some((name, doc)) => Some((name, doc)),
+        None => Some((rest, "")),
+    }
+}
+
+/// The name component of a descriptor whose prefix was already
+/// stripped — everything before the optional trailing `:doc`.
+fn arg_name(stripped: &str) -> &str {
+    match stripped.split_once(':') {
+        Some((name, _)) => name,
+        None => stripped,
+    }
+}
+
+/// The doc's first line, trimmed — the one-liner the generated files
+/// carry; multi-line help text stays out of them.
+fn doc_one_line(doc: &str) -> &str {
+    doc.lines().next().unwrap_or("").trim()
+}
+
+/// The doc as a handl string literal body: first line with `"` and `\`
+/// escaped (handl strings accept `\"`/`\\`; newlines are stripped by
+/// the first-line rule).
+fn doc_literal(doc: &str) -> String {
+    doc_one_line(doc).replace('\\', "\\\\").replace('"', "\\\"")
+}
 
 /// Emitter that writes CLI port/adapter `.hnl` files to disk.
 ///
@@ -145,6 +209,44 @@ pub(crate) fn build_port(module: &SdkgenModule, lib: &str) -> String {
                 out.push_str(&format!("--- {}\n", line.trim()));
             }
         }
+        // The option table: the `opts` record's shape is invisible in
+        // the signature (a bare `Obj`), so options that carry a doc get
+        // one `name (kind): doc` line each. Omitted entirely when no
+        // option learned a description.
+        if f.port_args.iter().any(|a| a.name == "opts") {
+            let rows: Vec<String> = f
+                .arg_descriptors
+                .iter()
+                .filter_map(|d| opt_desc(d))
+                .filter_map(|o| {
+                    let doc = doc_one_line(o.doc);
+                    (!doc.is_empty()).then(|| format!("---   {} ({}): {}\n", o.name, o.kind, doc))
+                })
+                .collect();
+            if !rows.is_empty() {
+                out.push_str("--- opts:\n");
+                for row in rows {
+                    out.push_str(&row);
+                }
+            }
+        }
+        // Positional and `rest` docs get the same treatment as an
+        // `--- args:` block.
+        let arg_rows: Vec<String> = f
+            .arg_descriptors
+            .iter()
+            .filter_map(|d| named_arg(d))
+            .filter_map(|(name, doc)| {
+                let doc = doc_one_line(doc);
+                (!doc.is_empty()).then(|| format!("---   {}: {}\n", name, doc))
+            })
+            .collect();
+        if !arg_rows.is_empty() {
+            out.push_str("--- args:\n");
+            for row in arg_rows {
+                out.push_str(&row);
+            }
+        }
         out.push_str(&format!("--- cli: {}\n", f.c_decl));
         let arg_list = f
             .port_args
@@ -186,18 +288,23 @@ pub(crate) fn build_adapter(module: &SdkgenModule, lib: &str, adapter_pkg: &str)
     out.push('\n');
 
     for f in &module.functions {
-        // `opt:kind:name:flag` descriptors → the per-command FlagSpec
-        // table `cli-c.argv` expands `opts` against.
+        // `opt:kind:name:flag[:doc]` descriptors → the per-command
+        // FlagSpec table `cli-c.argv` expands `opts` against. The doc
+        // (the help-table one-liner, empty when unknown) rides along
+        // in each entry — `argv`/`check` ignore it; the SDK docs read
+        // it.
         let specs: Vec<String> = f
             .arg_descriptors
             .iter()
-            .filter_map(|d| d.strip_prefix("opt:"))
-            .filter_map(|rest| {
-                let (kind, rest) = rest.split_once(':')?;
-                let (name, flag) = rest.rsplit_once(':')?;
-                Some(format!(
-                    "{{ name: \"{name}\", flag: \"{flag}\", kind: \"{kind}\" }}"
-                ))
+            .filter_map(|d| opt_desc(d))
+            .map(|o| {
+                format!(
+                    "{{ name: \"{}\", flag: \"{}\", kind: \"{}\", doc: \"{}\" }}",
+                    o.name,
+                    o.flag,
+                    o.kind,
+                    doc_literal(o.doc)
+                )
             })
             .collect();
         let flags_binding = format!("{}_flags", f.name);
@@ -217,6 +324,7 @@ pub(crate) fn build_adapter(module: &SdkgenModule, lib: &str, adapter_pkg: &str)
             .arg_descriptors
             .iter()
             .filter_map(|d| d.strip_prefix("pos:"))
+            .map(arg_name)
             .map(safe_ident)
             .collect();
         let positionals = format!("[{}]", positional_names.join(", "));
@@ -224,6 +332,7 @@ pub(crate) fn build_adapter(module: &SdkgenModule, lib: &str, adapter_pkg: &str)
             .arg_descriptors
             .iter()
             .find_map(|d| d.strip_prefix("rest:"))
+            .map(arg_name)
             .map(safe_ident)
             .unwrap_or_else(|| "[]".to_string());
         let opts_arg = if f.port_args.iter().any(|a| a.name == "opts") {

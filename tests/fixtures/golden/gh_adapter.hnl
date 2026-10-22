@@ -3,7 +3,7 @@
 from "cli-c" import { run, argv }
 from "../gh/gh" import { GhPrCreate, GhPrList }
 
-gh_pr_create_flags := [{ name: "draft", flag: "--draft", kind: "flag" }, { name: "label", flag: "--label", kind: "strings" }, { name: "title", flag: "--title", kind: "string" }]
+gh_pr_create_flags := [{ name: "draft", flag: "--draft", kind: "flag", doc: "" }, { name: "label", flag: "--label", kind: "strings", doc: "" }, { name: "title", flag: "--title", kind: "string", doc: "PR title" }]
 
 export gh_pr_create: GhPrCreate := (branch, opts, extras) ~> do {
   run(argv("gh", ["pr", "create"], [branch], gh_pr_create_flags, opts, extras))

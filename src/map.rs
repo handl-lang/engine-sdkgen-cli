@@ -15,6 +15,14 @@
 //!   `meta:json-capable` when the command offers a `--json`/`--format`/
 //!   `--output`/`-o` flag). Emitters ignore `meta:` when rebuilding argv.
 //!
+//! Every `pos:`/`opt:`/`rest:` descriptor may carry a trailing
+//! `:<doc>` component — the argument's one-line description from the
+//! tool's help table (or an authored/foreign spec), threaded through
+//! to the emitted SDK docs. Names, kinds, and flags are validated
+//! colon-free, so the doc is simply everything past the third
+//! separator and may itself contain colons; empty docs append
+//! nothing, keeping doc-less descriptors byte-identical.
+//!
 //! `port_args` aligns: one arg per positional (String/Int/Bool), a
 //! trailing `opts: Obj` iff the command has options, and `rest: [T]`
 //! last when variadic. `return_port` is `Output` / descriptor `cli`.
@@ -75,6 +83,16 @@ fn is_json_capable(node: &CommandNode) -> bool {
     })
 }
 
+/// The descriptor's optional trailing `:<doc>` component. The doc may
+/// contain colons (it is the last component) but is whitespace-trimmed;
+/// empty docs append nothing so doc-less descriptors stay unchanged.
+fn doc_suffix(doc: Option<&str>) -> String {
+    match doc.map(str::trim).filter(|d| !d.is_empty()) {
+        Some(d) => format!(":{d}"),
+        None => String::new(),
+    }
+}
+
 fn leaf_function(node: &CommandNode, words: &[String]) -> Function {
     let base = words.join("_");
     let mut port_args = Vec::new();
@@ -85,7 +103,11 @@ fn leaf_function(node: &CommandNode, words: &[String]) -> Function {
             name: pos.name.clone(),
             port: positional_port(&pos.kind).to_string(),
         });
-        descriptors.push(format!("pos:{}", pos.name));
+        descriptors.push(format!(
+            "pos:{}{}",
+            pos.name,
+            doc_suffix(pos.doc.as_deref())
+        ));
     }
     if !node.options.is_empty() {
         port_args.push(Arg {
@@ -93,7 +115,13 @@ fn leaf_function(node: &CommandNode, words: &[String]) -> Function {
             port: "Obj".to_string(),
         });
         for (name, opt) in &node.options {
-            descriptors.push(format!("opt:{}:{}:{}", opt.kind, name, opt.flag));
+            descriptors.push(format!(
+                "opt:{}:{}:{}{}",
+                opt.kind,
+                name,
+                opt.flag,
+                doc_suffix(opt.doc.as_deref())
+            ));
         }
     }
     if let Some(rest) = &node.rest {
@@ -101,7 +129,11 @@ fn leaf_function(node: &CommandNode, words: &[String]) -> Function {
             name: rest.name.clone(),
             port: format!("[{}]", positional_port(&rest.kind)),
         });
-        descriptors.push(format!("rest:{}", rest.name));
+        descriptors.push(format!(
+            "rest:{}{}",
+            rest.name,
+            doc_suffix(rest.doc.as_deref())
+        ));
     }
     // `meta:` descriptors carry emitter hints, not argv shape — the
     // `hnl-cli` adapter surfaces them as doc annotations.

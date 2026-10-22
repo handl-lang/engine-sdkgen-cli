@@ -153,3 +153,34 @@ fn json_output_flags_tag_a_meta_descriptor() {
             .contains(&"meta:json-capable".to_string())
     );
 }
+
+#[test]
+fn docs_thread_into_arg_descriptors() {
+    let spec: CliSpec = serde_yaml::from_str(
+        r#"
+name: t
+options:
+  state: { flag: "--state", kind: string, doc: "filter by state: open, closed" }
+  quiet: { flag: "--quiet", kind: flag, doc: "" }
+  bare: { flag: "--bare", kind: flag, doc: "   " }
+positionals: [{ name: path, kind: string, doc: "file to read" }]
+rest: { name: extras, kind: string, doc: "further argv words" }
+"#,
+    )
+    .unwrap();
+    let m = map_spec(&spec, "host");
+    assert_eq!(
+        m.functions[0].arg_descriptors,
+        vec![
+            "pos:path:file to read",
+            // Options emit in spec-key order (BTreeMap sort).
+            // Empty/whitespace docs append nothing.
+            "opt:flag:bare:--bare",
+            "opt:flag:quiet:--quiet",
+            // The doc may contain colons — it is the descriptor's
+            // last component, taken whole by the emitter.
+            "opt:string:state:--state:filter by state: open, closed",
+            "rest:extras:further argv words",
+        ]
+    );
+}

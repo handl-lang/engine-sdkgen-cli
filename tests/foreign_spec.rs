@@ -46,10 +46,10 @@ fn fig_spec_loads_through_the_backend() {
     assert_eq!(
         checkout.arg_descriptors,
         vec![
-            "pos:pr",
-            "opt:string:branch:--branch",
-            "opt:flag:detach:--detach",
-            "opt:flag:recurse_submodules:--recurse-submodules",
+            "pos:pr:Number, URL or branch of the PR",
+            "opt:string:branch:--branch:Local branch name to use [aliases: -b] [value: branch]",
+            "opt:flag:detach:--detach:Checkout PR with a detached HEAD [exclusive with: --branch]",
+            "opt:flag:recurse_submodules:--recurse-submodules:Update all submodules after checkout",
         ]
     );
     let list = m.functions.iter().find(|f| f.name == "gh_pr_list").unwrap();
@@ -59,7 +59,7 @@ fn fig_spec_loads_through_the_backend() {
     );
     assert!(
         list.arg_descriptors
-            .contains(&"opt:strings:label:--label".to_string()),
+            .contains(&"opt:strings:label:--label:Filter by label [value: label]".to_string()),
         "{:?}",
         list.arg_descriptors
     );
@@ -70,7 +70,11 @@ fn fig_spec_loads_through_the_backend() {
         .unwrap();
     assert_eq!(
         clone.arg_descriptors,
-        vec!["pos:repository", "pos:directory", "rest:extra_args"]
+        vec![
+            "pos:repository:owner/repo or a full URL",
+            "pos:directory:[optional]",
+            "rest:extra_args:Additional git clone flags [optional] [generator: filepaths]",
+        ]
     );
     // The `generators` field on the variadic arg degrades to a
     // `generator:` doc annotation — nothing drops with a warning.
@@ -106,13 +110,13 @@ fn cli_schema_document_loads_through_the_backend() {
     // Own params + namespace `options` + globalOptions all reach the
     // leaf.
     for needle in [
-        "pos:environment",
-        "opt:string:file:--file",
-        "opt:strings:tag:--tag",
-        "opt:flag:dry_run:--dry-run",
-        "opt:string:region:--region",
-        "opt:flag:verbose:--verbose",
-        "rest:extras",
+        "pos:environment:Target environment [required]",
+        "opt:string:file:--file:Config file to apply [required] [alias: -f]",
+        "opt:strings:tag:--tag:Deployment tags",
+        "opt:flag:dry_run:--dry-run:Preview the apply [role: dry-run]",
+        "opt:string:region:--region:Target region [alias: -r]",
+        "opt:flag:verbose:--verbose:Enable verbose output [alias: -v]",
+        "rest:extras:Extra arguments passed through",
     ] {
         assert!(
             apply.arg_descriptors.contains(&needle.to_string()),
@@ -137,7 +141,7 @@ fn cli_schema_document_loads_through_the_backend() {
     assert!(
         status
             .arg_descriptors
-            .contains(&"opt:flag:verbose:--verbose".to_string()),
+            .contains(&"opt:flag:verbose:--verbose:Enable verbose output [alias: -v]".to_string()),
         "{:?}",
         status.arg_descriptors
     );
@@ -258,14 +262,14 @@ fn usage_kdl_spec_loads_through_the_backend() {
     assert_eq!(
         deploy.arg_descriptors,
         vec![
-            "pos:service",
-            "opt:string:color:--color",
-            "opt:flag:dry_run:--dry-run",
-            "opt:string:env:--env",
-            "opt:string:output:--output",
-            "opt:flag:quiet:--quiet",
-            "opt:flag:verbose:--verbose",
-            "rest:files",
+            "pos:service:Service to deploy",
+            "opt:string:color:--color:[value: when] [default: auto] [one of: auto, always, never]",
+            "opt:flag:dry_run:--dry-run:Print what would happen",
+            "opt:string:env:--env:Target environment [aliases: -e] [value: env] [default: staging] [one of: staging, production]",
+            "opt:string:output:--output:Write output to a file [aliases: -o] [value: file]",
+            "opt:flag:quiet:--quiet:Enable quiet logging [aliases: -q]",
+            "opt:flag:verbose:--verbose:Enable verbose logging [aliases: -v] [count]",
+            "rest:files:Extra files to ship [optional]",
             "meta:json-capable",
         ]
     );
@@ -280,11 +284,11 @@ fn usage_kdl_spec_loads_through_the_backend() {
     assert_eq!(
         add.arg_descriptors,
         vec![
-            "pos:key",
-            "pos:value",
-            "opt:flag:force:--force",
-            "opt:flag:quiet:--quiet",
-            "opt:flag:verbose:--verbose",
+            "pos:key:The key for the config",
+            "pos:value:The value to store",
+            "opt:flag:force:--force:Overwrite an existing key [conflicts with: --dry-run]",
+            "opt:flag:quiet:--quiet:Enable quiet logging [aliases: -q]",
+            "opt:flag:verbose:--verbose:Enable verbose logging [aliases: -v] [count]",
         ]
     );
     let remove = m

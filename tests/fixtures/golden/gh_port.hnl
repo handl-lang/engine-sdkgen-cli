@@ -5,6 +5,10 @@ from "result" import { Result }
 from "cli" import { Output, Spawn }
 
 --- Create a pull request
+--- opts:
+---   title (string): PR title
+--- args:
+---   branch: base branch
 --- cli: gh pr create
 export GhPrCreate: (String, Obj, [String]) ~[1]~> Result<Output, Spawn>
 
