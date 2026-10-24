@@ -354,7 +354,7 @@ pub(crate) fn build_adapter(module: &SdkgenModule, lib: &str, adapter_pkg: &str)
             out.push_str(
                 "--- json-capable: stdout under `--json` is JSON — parse with\n\
                  --- lib-json's `parse` (`from \"json\" import { parse }`), composed\n\
-                 --- free: `parse(tag.untag(r).value.stdout)`.\n",
+                 --- free: `parse(r.value.stdout)`.\n",
             );
         }
         out.push_str(&format!(

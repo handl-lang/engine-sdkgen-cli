@@ -329,7 +329,7 @@ fn adapter_marks_json_capable_commands() {
     let create = adapter.find("export gh_pr_create").unwrap();
     assert!(mark < create, "{adapter}");
     assert!(
-        adapter.contains("parse(tag.untag(r).value.stdout)"),
+        adapter.contains("parse(r.value.stdout)"),
         "{adapter}"
     );
     assert!(adapter.contains("lib-json"), "{adapter}");
