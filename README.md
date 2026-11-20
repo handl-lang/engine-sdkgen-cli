@@ -1,8 +1,8 @@
-# sdkgen-cli
+# tool-sdkgen-cli
 
 `handl-plugin-sdkgen-cli` — the `cli` backend and `hnl-cli` emitter for
 the Handl SDK generator: SDKs for tools that only ship a binary. Part of
-the `sdkgen-*` family. Inputs are authored `*.clispec.yaml`, foreign specs
+the `tool-sdkgen-*` family. Inputs are authored `*.clispec.yaml`, foreign specs
 (fig / cli-schema v1 / usage-KDL), or a bare tool name probed via
 `--help`; output is a `.hnl` port + adapter pair against the `cli`/`cli-c`
 packages (`handl-lang/lib-cli`).
