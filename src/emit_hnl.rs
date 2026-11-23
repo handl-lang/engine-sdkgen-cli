@@ -89,7 +89,7 @@ fn doc_literal(doc: &str) -> String {
 /// Emitter that renders CLI port/adapter `.hnl` files as `Change`s.
 ///
 /// The [`Language`] used to canonicalize emitted source is injected at
-/// construction — same 0.8 seam as `engine-codegen-file`'s
+/// construction — same 0.8 seam as `tool-codegen-file`'s
 /// `FileEmitter`.
 pub struct HnlCliEmitter {
     lang: Arc<Language>,

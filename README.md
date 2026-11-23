@@ -1,8 +1,8 @@
-# engine-codegen-cli
+# tool-codegen-cli
 
 `handl-plugin-codegen-cli` — the `cli` source and `hnl-cli` emitter for
 the Handl codegen pipeline (PL-004): SDKs for tools that only ship a
-binary. Part of the `engine-codegen-*` family. Inputs are authored `*.clispec.yaml`, foreign specs
+binary. Part of the `tool-codegen-*` family. Inputs are authored `*.clispec.yaml`, foreign specs
 (fig / cli-schema v1 / usage-KDL), or a bare tool name probed via
 `--help`; output is a `.hnl` port + adapter pair against the `cli`/`cli-c`
 packages (`handl-lang/lib-cli`).
