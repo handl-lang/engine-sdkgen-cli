@@ -23,7 +23,7 @@ heck = "0.5"
 tempfile = "3"
 
 [dev-dependencies]
-handl-kit-data-prelude = { git = "https://github.com/handl-lang/kit-data-prelude", branch = "main" }
+handl-kit-data-prelude = { git = "https://github.com/handl-lang/host", branch = "main" }
 
 # dev-link: begin
 [patch."https://github.com/handl-lang/engine"]
@@ -54,12 +54,10 @@ handl-platform = { path = "../host/crates/platform" }
 handl-plugin-ext-diag = { path = "../host/crates/plugin-ext-diag" }
 handl-plugin-ext-fmt = { path = "../host/crates/plugin-ext-fmt" }
 handl-plugin-sdkgen = { path = "../host/crates/plugin-sdkgen" }
+handl-kit-data-prelude = { path = "../host/crates/handl-kit-data-prelude" }
+handl-kit-prelude-lang = { path = "../host/crates/handl-kit-prelude-lang" }
 [patch."https://github.com/handl-lang/kernel"]
 handl-calculus = { path = "../kernel/crates/handl-calculus" }
 handl-language = { path = "../kernel/crates/handl-language" }
 handl-value = { path = "../kernel/crates/handl-value" }
-[patch."https://github.com/handl-lang/kit-data-prelude"]
-handl-kit-data-prelude = { path = "../kit-data-prelude/crates/handl-kit-data-prelude" }
-[patch."https://github.com/handl-lang/kit-prelude-lang"]
-handl-kit-prelude-lang = { path = "../kit-prelude-lang/crates/handl-kit-prelude-lang" }
 # dev-link: end
