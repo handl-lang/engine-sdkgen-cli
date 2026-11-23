@@ -3,7 +3,7 @@
 This walks a real tool — `gh` — from a bare binary to a callable Handl
 SDK: probe its `--help`, emit the port/adapter pair, and invoke a
 command. The only inputs are a tool on `PATH` and `hnl` with the
-`cli` sdkgen target registered (the default feature set — see
+`cli` codegen target registered (the default feature set — see
 `host/docs/sdkgen/cli.md`).
 
 ## 1. Probe the tool
@@ -23,8 +23,8 @@ output.
 Two files appear:
 
 ```text
-generated/gh/gh.hnl            — the port: types + signatures
-generated/gh-cli-host/gh.hnl   — the adapter over cli-c
+generated/gh/gh.hnl                  — the port: types + signatures
+generated/gh/gh-cli-host/gh.hnl      — the adapter over cli-c
 ```
 
 ## 2. Read the port
@@ -47,7 +47,7 @@ command has named options, and a trailing list when the command is
 variadic. `Output`/`Spawn` come from the `cli` package; the child
 exit status is data (`Output.code`), never an exception.
 
-The sibling adapter binds each port to `cli-c`'s `run`/`argv` — no
+The nested adapter binds each port to `cli-c`'s `run`/`argv` — no
 shell anywhere; argv is assembled verbatim.
 
 ## 3. Call it
@@ -57,7 +57,7 @@ Generated adapters are ordinary `.hnl` modules. Import the adapter
 
 ```handl
 --- demo.hnl
-from "generated/gh-cli-host/gh" import * as m
+from "generated/gh/gh-cli-host/gh" import * as m
 
 --- `opts` fields are the spec names; flag-kind options take booleans.
 r := tag.untag(m.gh_pr_list({ state: "open" }, []))

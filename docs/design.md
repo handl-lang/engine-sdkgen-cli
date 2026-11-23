@@ -41,7 +41,7 @@ operates exactly this way.
 
 ## A descriptor-string IR
 
-`SdkgenModule` is shared across all sdkgen backends and carries no
+`SdkgenModule` is shared across all codegen sources and carries no
 CLI-specific fields — a CLI command's argv *shape* (positionals,
 flag/kind/spellings, a variadic tail, emitter hints) can't be a typed
 IR member without polluting the generic contract. The resolution is
@@ -62,7 +62,7 @@ Emission produces two packages on purpose:
 - **port** (`<pkg>/<module>.hnl`) — `export` arrow *types* against the
   `cli` package: the consumer-facing API. It names the contract, not
   the mechanism.
-- **adapter** (`<pkg>-cli-<target>/<module>.hnl`) — per-target
+- **adapter** (`<output>/<pkg>-cli-<target>/<module>.hnl`) — per-target, nested inside the output store (PL-004 `ArtifactRef` constraint)
   bindings that assemble argv via `cli-c`'s pure `argv` and spawn via
   `run` (`posix_spawnp` — never `sh -c`).
 

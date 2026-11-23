@@ -1,7 +1,7 @@
 --- Generated adapter for gh-cli-host/gh
 
 from "cli-c" import { run, argv }
-from "../gh/gh" import { GhPrCreate, GhPrList }
+from "../gh" import { GhPrCreate, GhPrList }
 
 gh_pr_create_flags := [{ name: "draft", flag: "--draft", kind: "flag", doc: "" }, { name: "label", flag: "--label", kind: "strings", doc: "" }, { name: "title", flag: "--title", kind: "string", doc: "PR title" }]
 

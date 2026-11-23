@@ -2,7 +2,9 @@ use super::emit_hnl::*;
 use crate::map::map_spec;
 use crate::spec::CliSpec;
 use handl_language::Language;
-use handl_plugin_sdkgen::{Emitter, SdkgenModule};
+use handl_plugin_codegen::{
+    ApplyOptions, EmitContext, Emitter, Engine, FsStore, RunMeta, SdkgenModule,
+};
 use std::sync::Arc;
 
 fn lang() -> Arc<Language> {
@@ -77,11 +79,11 @@ fn port_declares_colon_style_exports() {
 
 #[test]
 fn adapter_binds_flags_and_calls_run() {
-    let adapter = build_adapter(&gh_module(), "gh", "gh-cli-host");
+    let adapter = build_adapter(&gh_module(), "gh-cli-host");
     assert!(adapter.contains("--- Generated adapter for gh-cli-host/gh\n"));
     assert!(adapter.contains("from \"cli-c\" import { run, argv }\n"));
     assert!(
-        adapter.contains("from \"../gh/gh\" import { GhPrCreate, GhPrList }\n"),
+        adapter.contains("from \"../gh\" import { GhPrCreate, GhPrList }\n"),
         "{adapter}"
     );
     // No docs authored → `doc: ""` on every entry (the lib-cli
@@ -109,7 +111,7 @@ fn adapter_binds_flags_and_calls_run() {
 
 #[test]
 fn adapter_flag_specs_carry_docs() {
-    let adapter = build_adapter(&doc_module(), "gh", "gh-cli-host");
+    let adapter = build_adapter(&doc_module(), "gh-cli-host");
     assert!(
         adapter.contains(
             "{ name: \"draft\", flag: \"--draft\", kind: \"flag\", doc: \"\" }, { name: \"title\", flag: \"--title\", kind: \"string\", doc: \"PR title\" }"
@@ -140,7 +142,7 @@ options:
 "#,
     )
     .unwrap();
-    let adapter = build_adapter(&map_spec(&spec, "host"), "t", "t-cli-host");
+    let adapter = build_adapter(&map_spec(&spec, "host"), "t-cli-host");
     // First line only; `"` escaped.
     assert!(adapter.contains("doc: \"He said \\\"hi\\\"\""), "{adapter}");
     // Backslash escaped so the literal still parses.
@@ -224,62 +226,79 @@ fn keyword_arg_names_get_an_underscore() {
     assert_eq!(safe_ident("branch"), "branch");
 }
 
+/// `materialize` + `Engine::apply` through the kernel lifecycle — the
+/// same path `CodegenRegistry::run` drives (PL-004).
+fn apply(module: &SdkgenModule, out: &std::path::Path) {
+    let emitter = HnlCliEmitter::new(lang());
+    let ctx = EmitContext::new().with_output_dir(out);
+    let changes = emitter.materialize(module, &ctx).expect("materialize");
+    let store = FsStore::new(out);
+    let engine = Engine::new(&store);
+    let mut meta = RunMeta::new("test", "0.0.0");
+    meta.new_run_id();
+    engine
+        .apply(&changes, None, &meta, &ApplyOptions::default())
+        .expect("apply");
+}
+
 #[test]
 fn emit_writes_port_and_adapter_files() {
     let module = gh_module();
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("gh");
-    HnlCliEmitter::new(lang()).emit(&module, &out).unwrap();
+    apply(&module, &out);
     let port = std::fs::read_to_string(out.join("gh.hnl")).unwrap();
-    let adapter = std::fs::read_to_string(tmp.path().join("gh-cli-host").join("gh.hnl")).unwrap();
+    // Adapters nest inside the port dir (`<lib>-cli-<slug>/`), the
+    // `ArtifactRef`-safe PL-004 layout.
+    let adapter = std::fs::read_to_string(out.join("gh-cli-host").join("gh.hnl")).unwrap();
     assert!(port.contains("export GhPrCreate:"), "{port}");
     assert!(adapter.contains("run(argv("), "{adapter}");
 }
 
 #[test]
-fn emit_surfaces_dir_and_write_failures() {
-    let module = gh_module();
-    let tmp = tempfile::tempdir().unwrap();
-    // output inside an existing *file* → create_dir_all fails.
-    let blocker = tmp.path().join("blocker");
-    std::fs::write(&blocker, b"x").unwrap();
+fn materialize_requires_output_dir() {
     let e = HnlCliEmitter::new(lang())
-        .emit(&module, &blocker.join("gh"))
-        .unwrap_err();
-    assert!(e.to_string().contains("failed to create output dir"), "{e}");
-
-    // adapter dir collides with a file → create_dir_all fails.
-    std::fs::write(tmp.path().join("gh-cli-host"), b"x").unwrap();
-    let e = HnlCliEmitter::new(lang())
-        .emit(&module, &tmp.path().join("gh"))
+        .materialize(&gh_module(), &EmitContext::new())
         .unwrap_err();
     assert!(
-        e.to_string().contains("failed to create adapter dir"),
+        e.to_string().contains("requires EmitContext::output_dir"),
         "{e}"
     );
-    std::fs::remove_file(tmp.path().join("gh-cli-host")).unwrap();
+}
 
-    // `{module}.hnl` pre-existing as a directory → write fails.
-    let out = tmp.path().join("gh2");
-    std::fs::create_dir_all(out.join("gh.hnl")).unwrap();
-    let e = HnlCliEmitter::new(lang()).emit(&module, &out).unwrap_err();
-    assert!(e.to_string().contains("failed to write"), "{e}");
-
-    // adapter `{module}.hnl` as a directory → second write fails.
-    let out2 = tmp.path().join("gh3");
-    std::fs::create_dir_all(tmp.path().join("gh3-cli-host").join("gh.hnl")).unwrap();
-    let e = HnlCliEmitter::new(lang()).emit(&module, &out2).unwrap_err();
-    assert!(e.to_string().contains("failed to write"), "{e}");
+#[test]
+fn apply_surfaces_store_failures() {
+    let module = gh_module();
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("gh");
+    // `gh-cli-host` collides with a file → the nested adapter artifact
+    // cannot be written; `Engine::apply` fails closed.
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("gh-cli-host"), b"x").unwrap();
+    let emitter = HnlCliEmitter::new(lang());
+    let ctx = EmitContext::new().with_output_dir(&out);
+    let changes = emitter.materialize(&module, &ctx).expect("materialize");
+    let store = FsStore::new(&out);
+    let engine = Engine::new(&store);
+    let mut meta = RunMeta::new("test", "0.0.0");
+    meta.new_run_id();
+    assert!(
+        engine
+            .apply(&changes, None, &meta, &ApplyOptions::default())
+            .is_err()
+    );
 }
 
 #[test]
 fn empty_module_still_emits_headers() {
-    let mut module = SdkgenModule::default();
-    module.module = "empty".to_string();
-    module.target = "host".to_string();
+    let module = SdkgenModule {
+        module: "empty".to_string(),
+        target: "host".to_string(),
+        ..Default::default()
+    };
     let port = build_port(&module, "lib");
     assert!(port.contains("--- Generated port for lib.empty\n"));
-    let adapter = build_adapter(&module, "lib", "lib-cli-host");
+    let adapter = build_adapter(&module, "lib-cli-host");
     // No functions → no port import line (the `cli-c` import stays).
     assert!(!adapter.contains("from \"../"));
 }
@@ -321,16 +340,13 @@ fn adapter_marks_json_capable_commands() {
     module.functions[0]
         .arg_descriptors
         .push("meta:json-capable".to_string());
-    let adapter = build_adapter(&module, "gh", "gh-cli-host");
+    let adapter = build_adapter(&module, "gh-cli-host");
     // Exactly one marker — it lands on `gh_pr_create`, not `gh_pr_list`,
     // and it points at the free-function composition, not a helper.
     assert_eq!(adapter.matches("--- json-capable").count(), 1, "{adapter}");
     let mark = adapter.find("--- json-capable").unwrap();
     let create = adapter.find("export gh_pr_create").unwrap();
     assert!(mark < create, "{adapter}");
-    assert!(
-        adapter.contains("parse(r.value.stdout)"),
-        "{adapter}"
-    );
+    assert!(adapter.contains("parse(r.value.stdout)"), "{adapter}");
     assert!(adapter.contains("lib-json"), "{adapter}");
 }

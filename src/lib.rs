@@ -1,5 +1,5 @@
-//! CLI backend and emitters for the Handl SDK generator (ADR-0107) —
-//! SDKs for tools that only ship a binary.
+//! CLI backend and emitters for the Handl codegen pipeline (ADR-0107,
+//! PL-004) — SDKs for tools that only ship a binary.
 //!
 //! Pipeline, in module order:
 //! - [`backend`] — `CliBackend`: `*.clispec.yaml` input or a bare tool
@@ -34,27 +34,28 @@ pub use help::{ParsedHelp, ParsedOption, ParsedPositional, parse_help};
 pub use probe::{CommandRunner, ProbePlan, ProbeResult, RunHelp, probe_tool};
 pub use spec::{CliSpec, CommandNode, OptionSpec, PositionalSpec, ProbeSpec};
 
-use handl_plugin_sdkgen::{
-    SdkgenBackend, SdkgenBackendDef, SdkgenEmitterDef, SdkgenRegistry, SdkgenRequest, SdkgenTarget,
+use handl_plugin_codegen::{
+    AnyEmitter, AnySource, CodegenEmitterDef, CodegenRegistry, CodegenRequest, CodegenSourceDef,
+    CodegenTarget, erase_emitter, erase_source,
 };
 use std::sync::Arc;
 
-/// Register the `cli` sdkgen target on `reg` (ADR-0128 §0.1): backend
-/// `cli`, emitter `hnl-cli`, and the target record `(backend: "cli",
-/// emitter: "hnl-cli")` — emitters resolve by name through the
-/// registry, never by crate dependency.
-pub fn register(reg: &mut SdkgenRegistry) {
-    reg.register_backend(SdkgenBackendDef {
+/// Register the `cli` codegen target on `reg` (ADR-0128 §0.1, PL-004):
+/// source `cli`, emitter `hnl-cli`, and the target record
+/// `(source: "cli", emitter: "hnl-cli")` — emitters resolve by name
+/// through the registry, never by crate dependency.
+pub fn register(reg: &mut CodegenRegistry) {
+    reg.register_source(CodegenSourceDef {
         name: "cli",
-        make: make_backend,
+        make: make_source,
     });
-    reg.register_emitter(SdkgenEmitterDef {
+    reg.register_emitter(CodegenEmitterDef {
         name: "hnl-cli",
-        make: |req| Ok(Box::new(HnlCliEmitter::new(Arc::new(req.lang.clone())))),
+        make: make_emitter,
     });
-    reg.register_target(SdkgenTarget {
+    reg.register_target(CodegenTarget {
         name: "cli",
-        backend: "cli",
+        source: "cli",
         emitter: "hnl-cli",
         source_filters: false,
         docs: None,
@@ -62,7 +63,7 @@ pub fn register(reg: &mut SdkgenRegistry) {
     });
 }
 
-fn make_backend(req: &SdkgenRequest<'_>) -> Result<Box<dyn SdkgenBackend>, String> {
+fn make_source(req: &CodegenRequest<'_>) -> Result<Box<dyn AnySource>, String> {
     let mut config = match req.config {
         Some(path) => CliConfig::load(path)?,
         None => CliConfig::default(),
@@ -72,10 +73,16 @@ fn make_backend(req: &SdkgenRequest<'_>) -> Result<Box<dyn SdkgenBackend>, Strin
     if let Some(path) = req.emit_spec {
         config.emit_spec = Some(path.to_string_lossy().into_owned());
     }
-    Ok(Box::new(CliBackend::new(
+    Ok(erase_source(CliBackend::new(
         req.target.map(str::to_string),
         config,
     )))
+}
+
+fn make_emitter(req: &CodegenRequest<'_>) -> Result<Box<dyn AnyEmitter>, String> {
+    Ok(erase_emitter(HnlCliEmitter::new(Arc::new(
+        req.lang.clone(),
+    ))))
 }
 
 #[cfg(test)]

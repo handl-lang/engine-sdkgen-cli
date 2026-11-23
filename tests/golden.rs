@@ -4,8 +4,8 @@
 //! regenerate with `REGEN_GOLDEN=1`.
 
 use handl_language::Language;
-use handl_plugin_sdkgen::{Emitter, SdkgenBackend};
-use handl_plugin_sdkgen_cli::{CliBackend, CliConfig, HnlCliEmitter};
+use handl_plugin_codegen::{ApplyOptions, EmitContext, Emitter, Engine, FsStore, RunMeta};
+use handl_plugin_codegen_cli::{CliBackend, CliConfig, HnlCliEmitter};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -61,9 +61,20 @@ fn hnl_cli_port_and_adapter_match_golden() {
         .unwrap();
 
     let out = tmp.path().join("gh");
-    HnlCliEmitter::new(lang()).emit(&module, &out).unwrap();
+    // `materialize` → `Engine::apply` — the registry lifecycle path.
+    let changes = HnlCliEmitter::new(lang())
+        .materialize(&module, &EmitContext::new().with_output_dir(&out))
+        .unwrap();
+    let store = FsStore::new(&out);
+    let engine = Engine::new(&store);
+    let mut meta = RunMeta::new("test", "0.0.0");
+    meta.new_run_id();
+    engine
+        .apply(&changes, None, &meta, &ApplyOptions::default())
+        .unwrap();
     let port = std::fs::read_to_string(out.join("gh.hnl")).unwrap();
-    let adapter = std::fs::read_to_string(tmp.path().join("gh-cli-host").join("gh.hnl")).unwrap();
+    // Adapters nest inside the port dir (PL-004 `ArtifactRef` layout).
+    let adapter = std::fs::read_to_string(out.join("gh-cli-host").join("gh.hnl")).unwrap();
     compare("gh_port.hnl", &port);
     compare("gh_adapter.hnl", &adapter);
     // Both files canonicalize — `hnl fmt --check` passes on output.

@@ -27,7 +27,7 @@
 //! trailing `opts: Obj` iff the command has options, and `rest: [T]`
 //! last when variadic. `return_port` is `Output` / descriptor `cli`.
 
-use handl_plugin_sdkgen::{Arg, Function, ModuleImport, SdkgenModule};
+use handl_plugin_codegen::{Arg, Function, ModuleImport, SdkgenModule};
 use heck::{ToSnakeCase, ToUpperCamelCase};
 
 use crate::spec::{CliSpec, CommandNode};

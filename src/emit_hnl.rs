@@ -26,8 +26,7 @@
 //! have one.
 
 use handl_language::Language;
-use handl_plugin_sdkgen::{Emitter, SdkgenError, SdkgenModule};
-use std::path::Path;
+use handl_plugin_codegen::{Change, CodegenError, EmitContext, Emitter, SdkgenModule};
 use std::sync::Arc;
 
 /// One `opt:<kind>:<name>:<flag>[:<doc>]` descriptor, split into its
@@ -87,10 +86,11 @@ fn doc_literal(doc: &str) -> String {
     doc_one_line(doc).replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Emitter that writes CLI port/adapter `.hnl` files to disk.
+/// Emitter that renders CLI port/adapter `.hnl` files as `Change`s.
 ///
 /// The [`Language`] used to canonicalize emitted source is injected at
-/// construction — same 0.8 seam as `sdkgen-file`'s [`FileEmitter`].
+/// construction — same 0.8 seam as `engine-codegen-file`'s
+/// `FileEmitter`.
 pub struct HnlCliEmitter {
     lang: Arc<Language>,
 }
@@ -101,10 +101,19 @@ impl HnlCliEmitter {
     }
 }
 
-impl Emitter for HnlCliEmitter {
-    fn emit(&self, module: &SdkgenModule, output: &Path) -> Result<(), SdkgenError> {
-        std::fs::create_dir_all(output)
-            .map_err(|e| SdkgenError(format!("failed to create output dir: {e}")))?;
+impl Emitter<SdkgenModule> for HnlCliEmitter {
+    /// Render the desired `.hnl` artifact set — no fs writes (PL-004).
+    /// `req.output_dir` is the port package dir; the adapter nests
+    /// under `<adapter_pkg>/` inside it (same `ArtifactRef` constraint
+    /// as `hnl-file` — T-076 owns the sibling-layout decision).
+    fn materialize(
+        &self,
+        module: &SdkgenModule,
+        req: &EmitContext,
+    ) -> Result<Vec<Change>, CodegenError> {
+        let output = req.output_dir.as_deref().ok_or_else(|| {
+            CodegenError::Emit("hnl-cli emitter requires EmitContext::output_dir".to_string())
+        })?;
 
         let lib = output
             .file_name()
@@ -113,23 +122,14 @@ impl Emitter for HnlCliEmitter {
             .to_string();
         let module_name = &module.module;
         let adapter_pkg = format!("{lib}-cli-{}", target_slug(&module.target));
-        let adapter_dir = output.parent().unwrap_or(output).join(&adapter_pkg);
-        std::fs::create_dir_all(&adapter_dir)
-            .map_err(|e| SdkgenError(format!("failed to create adapter dir: {e}")))?;
 
-        let port_path = output.join(format!("{module_name}.hnl"));
-        let adapter_path = adapter_dir.join(format!("{module_name}.hnl"));
-        std::fs::write(
-            &port_path,
-            canonicalize(&self.lang, build_port(module, &lib)),
-        )
-        .map_err(|e| SdkgenError(format!("failed to write {port_path:?}: {e}")))?;
-        std::fs::write(
-            &adapter_path,
-            canonicalize(&self.lang, build_adapter(module, &lib, &adapter_pkg)),
-        )
-        .map_err(|e| SdkgenError(format!("failed to write {adapter_path:?}: {e}")))?;
-        Ok(())
+        let port = canonicalize(&self.lang, build_port(module, &lib));
+        let adapter = canonicalize(&self.lang, build_adapter(module, &adapter_pkg));
+
+        Ok(vec![
+            Change::text(format!("{module_name}.hnl"), port),
+            Change::text(format!("{adapter_pkg}/{module_name}.hnl"), adapter),
+        ])
     }
 }
 
@@ -140,14 +140,14 @@ pub(crate) fn canonicalize(lang: &Language, src: String) -> String {
     match handl_plugin_ext_fmt::format_source_with_language(lang, &src) {
         Ok(formatted) => formatted,
         Err(e) => {
-            eprintln!("sdkgen: emitted source failed canonical fmt ({e}); writing unformatted");
+            eprintln!("codegen: emitted source failed canonical fmt ({e}); emitting unformatted");
             src
         }
     }
 }
 
 /// `x86_64-unknown-linux` → `linux-x86_64`; single-word targets
-/// (`host`, `browser`) stay verbatim. Mirrors `sdkgen-file`.
+/// (`host`, `browser`) stay verbatim. Mirrors `codegen-file`.
 pub(crate) fn target_slug(target: &str) -> String {
     let parts: Vec<&str> = target.split('-').collect();
     if parts.len() == 1 {
@@ -262,7 +262,7 @@ pub(crate) fn build_port(module: &SdkgenModule, lib: &str) -> String {
     out
 }
 
-pub(crate) fn build_adapter(module: &SdkgenModule, lib: &str, adapter_pkg: &str) -> String {
+pub(crate) fn build_adapter(module: &SdkgenModule, adapter_pkg: &str) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "--- Generated adapter for {adapter_pkg}/{}\n",
@@ -279,8 +279,10 @@ pub(crate) fn build_adapter(module: &SdkgenModule, lib: &str, adapter_pkg: &str)
         .map(|f| f.port_name.clone())
         .collect();
     if !ports.is_empty() {
+        // Adapters nest under `<adapter_pkg>/` inside the port dir, so
+        // the port import is `../{module}` (PL-004 T-075 layout).
         out.push_str(&format!(
-            "from \"../{lib}/{}\" import {{ {} }}\n",
+            "from \"../{}\" import {{ {} }}\n",
             module.module,
             ports.join(", ")
         ));
@@ -370,7 +372,7 @@ pub(crate) fn build_adapter(module: &SdkgenModule, lib: &str, adapter_pkg: &str)
     out
 }
 
-/// Canonical Handl keywords (mirrors `sdkgen-file`/`lexer_rules.yaml`):
+/// Canonical Handl keywords (mirrors `codegen-file`/`lexer_rules.yaml`):
 /// spec argument names that collide (`data`, `type`, `for`, …) get a
 /// `_` suffix so `(params) ~> do` still parses.
 const HANDL_KEYWORDS: &[&str] = &[

@@ -3,8 +3,7 @@
 //! KDL files resolve to the same `SdkgenModule` IR a `.clispec.yaml`
 //! produces; unrecognized files still fall back to the tool probe.
 
-use handl_plugin_sdkgen::SdkgenBackend;
-use handl_plugin_sdkgen_cli::{CliBackend, CliConfig, CliSpec};
+use handl_plugin_codegen_cli::{CliBackend, CliConfig, CliSpec};
 use std::io::Write;
 use std::path::Path;
 
@@ -14,7 +13,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-fn fn_names(m: &handl_plugin_sdkgen::SdkgenModule) -> Vec<&str> {
+fn fn_names(m: &handl_plugin_codegen::SdkgenModule) -> Vec<&str> {
     m.functions.iter().map(|f| f.name.as_str()).collect()
 }
 
@@ -221,11 +220,15 @@ fn foreign_spec_emit_spec_round_trip() {
         emit_spec: Some(out.to_string_lossy().into_owned()),
         ..Default::default()
     };
-    CliBackend::new(None, cfg)
+    let m = CliBackend::new(None, cfg)
         .parse_header(&fixture("gh.fig.json"))
         .unwrap();
-    // The emitted canonical spec re-loads to the same tree.
-    let spec = CliSpec::load(&out).unwrap();
+    // The emitted canonical spec re-loads to the same tree. PL-004:
+    // `parse` writes nothing — the dump rides on `spec_dump` and the
+    // registry writes it post-parse.
+    let dump = m.spec_dump.expect("spec_dump");
+    assert_eq!(dump.dest, out.to_string_lossy());
+    let spec: CliSpec = serde_yaml::from_str(&dump.yaml).unwrap();
     assert_eq!(spec.name, "gh");
     assert!(spec.root.commands["pr"].commands.contains_key("list"));
     let rest = spec.root.commands["repo"].commands["clone"]
@@ -343,10 +346,12 @@ fn usage_kdl_emit_spec_round_trip() {
         emit_spec: Some(out.to_string_lossy().into_owned()),
         ..Default::default()
     };
-    CliBackend::new(None, cfg)
+    let m = CliBackend::new(None, cfg)
         .parse_header(&fixture("example.kdl"))
         .unwrap();
-    let spec = CliSpec::load(&out).unwrap();
+    let dump = m.spec_dump.expect("spec_dump");
+    assert_eq!(dump.dest, out.to_string_lossy());
+    let spec: CliSpec = serde_yaml::from_str(&dump.yaml).unwrap();
     assert_eq!(spec.name, "mycli");
     let deploy = &spec.root.commands["deploy"];
     assert_eq!(deploy.rest.as_ref().unwrap().name, "files");

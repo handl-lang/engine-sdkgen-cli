@@ -1,9 +1,9 @@
 //! Registry wiring: the `cli` target resolves backend `cli` +
-//! emitter `hnl-cli` by name, and `SdkgenRegistry::run` drives a
+//! emitter `hnl-cli` by name, and `CodegenRegistry::run` drives a
 //! spec file end-to-end into port/adapter files.
 
 use handl_language::Language;
-use handl_plugin_sdkgen::{SdkgenRegistry, SdkgenRequest, SdkgenTargetError};
+use handl_plugin_codegen::{CodegenRegistry, CodegenRequest, CodegenTargetError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -11,14 +11,14 @@ fn lang() -> Language {
     handl_kit_data_prelude::language_from_yaml().unwrap()
 }
 
-fn registry() -> SdkgenRegistry {
-    let mut reg = SdkgenRegistry::new();
-    handl_plugin_sdkgen_cli::register(&mut reg);
+fn registry() -> CodegenRegistry {
+    let mut reg = CodegenRegistry::new();
+    handl_plugin_codegen_cli::register(&mut reg);
     reg
 }
 
-fn request<'a>(spec: &'a Path, output: &'a Path, lang: &'a Language) -> SdkgenRequest<'a> {
-    SdkgenRequest {
+fn request<'a>(spec: &'a Path, output: &'a Path, lang: &'a Language) -> CodegenRequest<'a> {
+    CodegenRequest {
         spec,
         source_url: None,
         output,
@@ -28,6 +28,7 @@ fn request<'a>(spec: &'a Path, output: &'a Path, lang: &'a Language) -> SdkgenRe
         config: None,
         emit_spec: None,
         lang,
+        cache_dir: None,
     }
 }
 
@@ -36,7 +37,7 @@ fn registers_backend_emitters_and_target() {
     let reg = registry();
     assert!(reg.target_names().contains(&"cli"));
     let t = reg.target("cli").unwrap();
-    assert_eq!(t.backend, "cli");
+    assert_eq!(t.source, "cli");
     assert_eq!(t.emitter, "hnl-cli");
     assert!(!t.source_filters);
     assert!(t.docs.is_none());
@@ -61,7 +62,8 @@ fn run_drives_spec_file_to_emitted_files() {
 
     let port = std::fs::read_to_string(output.join("gh.hnl")).unwrap();
     assert!(port.contains("export GhPrList:"), "{port}");
-    let adapter = std::fs::read_to_string(tmp.path().join("gh-cli-host").join("gh.hnl")).unwrap();
+    // Adapters nest inside the port dir (PL-004 `ArtifactRef` layout).
+    let adapter = std::fs::read_to_string(output.join("gh-cli-host").join("gh.hnl")).unwrap();
     assert!(
         adapter.contains("run(argv(\"gh\", [\"pr\", \"list\"]"),
         "{adapter}"
@@ -76,7 +78,7 @@ fn run_reports_backend_errors_as_failed() {
     let lang = lang();
     let req = request(&spec, &output, &lang);
     match registry().run("cli", &req) {
-        Err(SdkgenTargetError::Failed(e)) => assert!(e.contains("cli spec not found"), "{e}"),
+        Err(CodegenTargetError::Failed(e)) => assert!(e.contains("cli spec not found"), "{e}"),
         other => panic!("expected Failed, got {other:?}"),
     }
 }
@@ -91,7 +93,7 @@ fn include_exclude_are_rejected_for_cli() {
     let mut req = request(&spec, &output, &lang);
     req.include = Some("*");
     match registry().run("cli", &req) {
-        Err(SdkgenTargetError::Usage(e)) => assert!(e.contains("--include"), "{e}"),
+        Err(CodegenTargetError::Usage(e)) => assert!(e.contains("--include"), "{e}"),
         other => panic!("expected Usage, got {other:?}"),
     }
 }
@@ -108,7 +110,7 @@ fn config_overlay_loads_through_make() {
     let mut req = request(&spec, &output, &lang);
     req.config = Some(Path::new("/no/such/config.yaml"));
     match registry().run("cli", &req) {
-        Err(SdkgenTargetError::Failed(e)) => {
+        Err(CodegenTargetError::Failed(e)) => {
             assert!(e.contains("failed to read config"), "{e}")
         }
         other => panic!("expected Failed, got {other:?}"),
@@ -125,7 +127,7 @@ fn target_default_is_host() {
     let lang = lang();
     let req = request(&spec, &output, &lang);
     registry().run("cli", &req).unwrap();
-    assert!(tmp.path().join("t-cli-host").join("t.hnl").exists());
+    assert!(output.join("t-cli-host").join("t.hnl").exists());
 }
 
 #[test]
@@ -138,7 +140,7 @@ fn custom_target_slug_names_the_adapter_dir() {
     let mut req = request(&spec, &output, &lang);
     req.target = Some("x86_64-unknown-linux");
     registry().run("cli", &req).unwrap();
-    assert!(tmp.path().join("t-cli-linux-x86_64").join("t.hnl").exists());
+    assert!(output.join("t-cli-linux-x86_64").join("t.hnl").exists());
 }
 
 #[test]
@@ -151,7 +153,7 @@ fn missing_yaml_spec_is_an_error_not_a_probe() {
     let lang = lang();
     let req = request(&spec, &output, &lang);
     match registry().run("cli", &req) {
-        Err(SdkgenTargetError::Failed(e)) => assert!(e.contains("cli spec not found"), "{e}"),
+        Err(CodegenTargetError::Failed(e)) => assert!(e.contains("cli spec not found"), "{e}"),
         other => panic!("expected Failed, got {other:?}"),
     }
 }
@@ -164,7 +166,7 @@ fn separator_path_that_does_not_exist_errors() {
     let lang = lang();
     let req = request(&spec, &output, &lang);
     match registry().run("cli", &req) {
-        Err(SdkgenTargetError::Failed(e)) => {
+        Err(CodegenTargetError::Failed(e)) => {
             assert!(e.contains("tool or spec not found"), "{e}")
         }
         other => panic!("expected Failed, got {other:?}"),
@@ -178,7 +180,7 @@ fn directory_input_is_an_error() {
     let lang = lang();
     let req = request(tmp.path(), &output, &lang);
     match registry().run("cli", &req) {
-        Err(SdkgenTargetError::Failed(e)) => {
+        Err(CodegenTargetError::Failed(e)) => {
             assert!(e.contains("not a spec or tool"), "{e}")
         }
         other => panic!("expected Failed, got {other:?}"),

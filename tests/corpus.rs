@@ -5,7 +5,7 @@
 //! include:`. Every fixture must parse without panicking and report
 //! the confidence its grammar deserves.
 
-use handl_plugin_sdkgen_cli::parse_help;
+use handl_plugin_codegen_cli::parse_help;
 
 fn fixture(name: &str) -> String {
     let path = format!("{}/tests/fixtures/help/{name}", env!("CARGO_MANIFEST_DIR"));

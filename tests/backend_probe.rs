@@ -1,8 +1,7 @@
 //! `CliBackend::parse_header` probe paths: bare tool names, executable
 //! paths, spec files carrying `probe:`, and the `max_depth` config cap.
 
-use handl_plugin_sdkgen::SdkgenBackend;
-use handl_plugin_sdkgen_cli::{CliBackend, CliConfig};
+use handl_plugin_codegen_cli::{CliBackend, CliConfig};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -26,7 +25,7 @@ fn fixture_tool(dir: &Path) -> PathBuf {
     path
 }
 
-fn fn_names(m: &handl_plugin_sdkgen::SdkgenModule) -> Vec<&str> {
+fn fn_names(m: &handl_plugin_codegen::SdkgenModule) -> Vec<&str> {
     m.functions.iter().map(|f| f.name.as_str()).collect()
 }
 
@@ -152,7 +151,10 @@ fn spec_probe_flag_and_config_drive_the_plan() {
 }
 
 #[test]
-fn emit_spec_writes_the_resolved_tree_and_round_trips() {
+fn emit_spec_dumps_the_resolved_tree_on_the_ir() {
+    // PL-004: `Source::parse` writes nothing — the resolved tree rides
+    // on `SdkgenModule::spec_dump` and `CodegenRegistry::run` writes it
+    // (destinations are arbitrary paths/stdout, outside the store).
     let tmp = tempfile::tempdir().unwrap();
     let tool = fixture_tool(tmp.path());
     let out = tmp.path().join("faketool.clispec.yaml");
@@ -160,9 +162,12 @@ fn emit_spec_writes_the_resolved_tree_and_round_trips() {
         emit_spec: Some(out.to_string_lossy().into_owned()),
         ..Default::default()
     };
-    CliBackend::new(None, cfg).parse_header(&tool).unwrap();
+    let m = CliBackend::new(None, cfg).parse_header(&tool).unwrap();
+    assert!(!out.exists(), "parse must not write the emit-spec dump");
+    let dump = m.spec_dump.expect("spec_dump");
+    assert_eq!(dump.dest, out.to_string_lossy());
 
-    let spec = handl_plugin_sdkgen_cli::CliSpec::load(&out).unwrap();
+    let spec: handl_plugin_codegen_cli::CliSpec = serde_yaml::from_str(&dump.yaml).unwrap();
     assert_eq!(spec.name, "faketool");
     // `probe:` is never emitted — the dumped tree is the resolved one.
     assert!(spec.probe.is_none());
@@ -172,29 +177,28 @@ fn emit_spec_writes_the_resolved_tree_and_round_trips() {
     assert_eq!(shared.positionals[0].name, "name");
     // Re-loading gives back exactly the tree that was written.
     let yaml = spec.dump();
-    let again: handl_plugin_sdkgen_cli::CliSpec = serde_yaml::from_str(&yaml).unwrap();
+    let again: handl_plugin_codegen_cli::CliSpec = serde_yaml::from_str(&yaml).unwrap();
     assert_eq!(again.root, spec.root);
 }
 
 #[test]
-fn emit_spec_dash_prints_and_bad_dest_errors() {
+fn emit_spec_destinations_travel_verbatim() {
+    // `-` (stdout) and arbitrary paths are carried on the IR — the
+    // host writes them post-parse, so `Source::parse` cannot fail on
+    // an unwritable destination.
     let tmp = tempfile::tempdir().unwrap();
     let tool = fixture_tool(tmp.path());
-    // `-` writes the spec to stdout — the run still succeeds.
     let cfg = CliConfig {
         emit_spec: Some("-".to_string()),
         ..Default::default()
     };
-    CliBackend::new(None, cfg).parse_header(&tool).unwrap();
+    let m = CliBackend::new(None, cfg).parse_header(&tool).unwrap();
+    assert_eq!(m.spec_dump.unwrap().dest, "-");
 
-    // A directory as the destination fails the write.
     let cfg = CliConfig {
         emit_spec: Some(tmp.path().to_string_lossy().into_owned()),
         ..Default::default()
     };
-    let e = CliBackend::new(None, cfg).parse_header(&tool).unwrap_err();
-    assert!(
-        e.to_string().contains("failed to write emitted spec"),
-        "{e}"
-    );
+    let m = CliBackend::new(None, cfg).parse_header(&tool).unwrap();
+    assert_eq!(m.spec_dump.unwrap().dest, tmp.path().to_string_lossy());
 }

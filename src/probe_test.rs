@@ -22,7 +22,7 @@ fn canned(
         .collect();
     move |_tool, args| {
         table
-            .get(&args.to_vec())
+            .get(args)
             .cloned()
             .unwrap_or_else(|| Err("unexpected argv".to_string()))
     }
@@ -182,10 +182,9 @@ fn probe_plan_defaults() {
     let p = ProbePlan::default();
     assert_eq!(p.flag, "--help");
     assert_eq!(p.max_depth, 1);
-    let r = CommandRunner::default();
     // with_timeout round-trips through the same struct.
     let _ = CommandRunner::with_timeout(std::time::Duration::from_millis(1));
-    drop(r);
+    let _r = CommandRunner::default();
 }
 
 #[test]

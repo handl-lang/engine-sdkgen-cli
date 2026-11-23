@@ -49,18 +49,21 @@ and they would hide the pure `~>` boundary.
 
 ## `hnl-cli` output contract
 
-`HnlCliEmitter` writes two files:
+`HnlCliEmitter::materialize` returns two `Change`s (PL-004 — no fs
+writes; `CodegenRegistry::run` applies them through `Engine::apply`):
 
 ```text
-<output>/<module>.hnl                       — port
-<output>/../<lib>-cli-<slug>/<module>.hnl   — adapter
+<output>/<module>.hnl                          — port
+<output>/<lib>-cli-<slug>/<module>.hnl         — adapter
 ```
 
 `<lib>` is the basename of `--output`; `<slug>` is
-`target_slug(module.target)` (`host` stays `host`). Both run through
-`format_source_with_language` (the injected `Language` from
-`SdkgenRequest`) — unformatted text is written only on a formatter
-error.
+`target_slug(module.target)` (`host` stays `host`). The adapter nests
+*inside* the output dir — `ArtifactRef`s cannot escape the store root
+with `..`; the pre-PL-004 sibling layout is a T-076 follow-up. Both
+texts run through `format_source_with_language` (the injected
+`Language` captured at emitter construction) — unformatted text is
+emitted only on a formatter error.
 
 Port (`gh/gh.hnl`):
 
@@ -82,13 +85,13 @@ from "cli" import { Output, Spawn }
 export GhPrCreate: (String, Obj, [String]) ~[1]~> Result<Output, Spawn>
 ```
 
-Adapter (`gh-cli-host/gh.hnl`):
+Adapter (`gh/gh-cli-host/gh.hnl`):
 
 ```handl
 --- Generated adapter for gh-cli-host/gh
 
 from "cli-c" import { run, argv }
-from "../gh/gh" import { GhPrCreate, GhPrList }
+from "../gh" import { GhPrCreate, GhPrList }
 
 gh_pr_create_flags := [{ name: "draft", flag: "--draft", kind: "flag", doc: "" }, …]
 

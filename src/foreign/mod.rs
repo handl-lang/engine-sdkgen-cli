@@ -96,14 +96,14 @@ impl ForeignSpec {
         if is_kdl_name(path) {
             return Some(Format::Usage);
         }
-        if let Ok(v) = serde_json::from_str::<Value>(src) {
-            if let Some(obj) = v.as_object() {
-                if obj.contains_key("cli-schema-version") || obj.contains_key("schemaVersion") {
-                    return Some(Format::CliSchema);
-                }
-                if fig_shaped(obj) {
-                    return Some(Format::Fig);
-                }
+        if let Ok(v) = serde_json::from_str::<Value>(src)
+            && let Some(obj) = v.as_object()
+        {
+            if obj.contains_key("cli-schema-version") || obj.contains_key("schemaVersion") {
+                return Some(Format::CliSchema);
+            }
+            if fig_shaped(obj) {
+                return Some(Format::Fig);
             }
         }
         if usage::usage_shaped(src) {

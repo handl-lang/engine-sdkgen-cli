@@ -593,10 +593,10 @@ fn cs_namespace(
     );
     let cpath = format!("{path}.{seg}");
     let node = parent.commands.entry(seg.to_string()).or_default();
-    if let Some(about) = join_doc(summary_notes(ns).as_deref(), &[]) {
-        if node.about.is_none() {
-            node.about = Some(about);
-        }
+    if let Some(about) = join_doc(summary_notes(ns).as_deref(), &[])
+        && node.about.is_none()
+    {
+        node.about = Some(about);
     }
     // Flags from enclosing namespaces land on this node too.
     for (k, v) in inherited {

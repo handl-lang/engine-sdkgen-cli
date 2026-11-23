@@ -178,6 +178,7 @@ fn worse(current: &mut String, next: &str) {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // probe recursion carries plan/run state
 /// Fill `node` from `tool [path...] <flag>`, trying each candidate
 /// help flag until one returns parseable text, then recurse into each
 /// discovered subcommand while `depth < max_depth`. Returns `true`

@@ -1,8 +1,8 @@
-# engine-sdkgen-cli
+# engine-codegen-cli
 
-`handl-plugin-sdkgen-cli` — the `cli` backend and `hnl-cli` emitter for
-the Handl SDK generator: SDKs for tools that only ship a binary. Part of
-the `engine-sdkgen-*` family. Inputs are authored `*.clispec.yaml`, foreign specs
+`handl-plugin-codegen-cli` — the `cli` source and `hnl-cli` emitter for
+the Handl codegen pipeline (PL-004): SDKs for tools that only ship a
+binary. Part of the `engine-codegen-*` family. Inputs are authored `*.clispec.yaml`, foreign specs
 (fig / cli-schema v1 / usage-KDL), or a bare tool name probed via
 `--help`; output is a `.hnl` port + adapter pair against the `cli`/`cli-c`
 packages (`handl-lang/lib-cli`).

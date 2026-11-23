@@ -163,10 +163,12 @@ fn apply_runs_drop_and_types_before_rename() {
     // Keys reference original names — `pr.create` in `types` still
     // applies even though `rename` later moves it to `make`.
     let mut s = spec();
-    let mut c = CliConfig::default();
-    c.drop = vec!["pr.delete".to_string()];
-    c.types = BTreeMap::from([("pr.create.reviewers".to_string(), "strings".to_string())]);
-    c.rename = BTreeMap::from([("pr.create".to_string(), "make".to_string())]);
+    let c = CliConfig {
+        drop: vec!["pr.delete".to_string()],
+        types: BTreeMap::from([("pr.create.reviewers".to_string(), "strings".to_string())]),
+        rename: BTreeMap::from([("pr.create".to_string(), "make".to_string())]),
+        ..Default::default()
+    };
     let diags = c.apply(&mut s);
     assert!(diags.is_empty());
     let pr = &s.root.commands["pr"];

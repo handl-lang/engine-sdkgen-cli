@@ -1,4 +1,4 @@
-//! The `cli` [`SdkgenBackend`]: `*.clispec.yaml` files load directly;
+//! The `cli` [`Source`]: `*.clispec.yaml` files load directly;
 //! recognized foreign specs (fig, cli-schema — see [`crate::foreign`])
 //! ingest into the same IR; anything else is a tool name (or path)
 //! probed via `--help`.
@@ -7,8 +7,12 @@
 //! overlays the authored `commands` on the discovered tree — authored
 //! nodes win field-by-field, so a spec can declare only the tree shape
 //! and let probe fill in options.
+//!
+//! Side-effect policy (PL-004): `parse` runs the read-only probe
+//! subprocesses but writes nothing — the `--emit-spec` dump travels on
+//! `SdkgenModule::spec_dump` and `CodegenRegistry::run` writes it.
 
-use handl_plugin_sdkgen::{SdkgenBackend, SdkgenError, SdkgenModule};
+use handl_plugin_codegen::{CodegenError, EmitContext, SdkgenModule, Source, SpecDump};
 use std::path::Path;
 
 use crate::config::CliConfig;
@@ -37,25 +41,45 @@ fn is_yaml(path: &Path) -> bool {
     )
 }
 
-impl SdkgenBackend for CliBackend {
-    fn parse_header(&self, path: &Path) -> Result<SdkgenModule, SdkgenError> {
+impl Source<SdkgenModule> for CliBackend {
+    fn parse(&self, req: &EmitContext) -> Result<SdkgenModule, CodegenError> {
+        let path = req.spec_path.as_deref().ok_or_else(|| {
+            CodegenError::Parse("cli source requires EmitContext::spec_path".to_string())
+        })?;
+        self.parse_path(path, req.source_url.as_deref())
+    }
+}
+
+impl CliBackend {
+    /// Parse the spec/probe input at `path` — the `Source::parse` body
+    /// behind a path-shaped convenience wrapper (tests, non-registry
+    /// callers). `parse_header` keeps the pre-PL-004 name.
+    pub fn parse_header(&self, path: &Path) -> Result<SdkgenModule, CodegenError> {
+        self.parse_path(path, None)
+    }
+
+    fn parse_path(
+        &self,
+        path: &Path,
+        source_url: Option<&str>,
+    ) -> Result<SdkgenModule, CodegenError> {
         let mut diagnostics = Vec::new();
 
         // Resolve the input into a spec plus the probe target string —
         // for a spec file the probed tool is the spec's own `name`.
         let (mut spec, probe_target) = if path.is_file() && is_yaml(path) {
-            let spec = CliSpec::load(path).map_err(SdkgenError)?;
+            let spec = CliSpec::load(path).map_err(CodegenError::Parse)?;
             let target = spec.name.clone();
             (spec, target)
         } else if is_yaml(path) {
-            return Err(SdkgenError(format!(
+            return Err(CodegenError::Parse(format!(
                 "cli spec not found: {}",
                 path.display()
             )));
         } else if foreign::claims_path(path) && !path.is_file() {
             // A `*.fig.json`/`*.figspec`/`*.cli-schema.json` name that
             // is not a file is a missing spec, not a probeable tool.
-            return Err(SdkgenError(format!(
+            return Err(CodegenError::Parse(format!(
                 "cli spec not found: {}",
                 path.display()
             )));
@@ -63,7 +87,7 @@ impl SdkgenBackend for CliBackend {
             // An existing file gets a shot at foreign-spec detection
             // before it falls back to being probed as a tool.
             let foreign = if path.is_file() {
-                ForeignSpec::load(path).map_err(SdkgenError)?
+                ForeignSpec::load(path).map_err(CodegenError::Parse)?
             } else {
                 None
             };
@@ -77,13 +101,15 @@ impl SdkgenBackend for CliBackend {
                     // An existing non-yaml file is a directory or device —
                     // not a spec and not a runnable tool.
                     if !path.is_file() {
-                        return Err(SdkgenError(format!(
+                        return Err(CodegenError::Parse(format!(
                             "not a spec or tool: {}",
                             path.display()
                         )));
                     }
                 } else if arg.contains('/') || arg.contains('\\') {
-                    return Err(SdkgenError(format!("tool or spec not found: {arg}")));
+                    return Err(CodegenError::Parse(format!(
+                        "tool or spec not found: {arg}"
+                    )));
                 }
                 // Bare tool name (or executable path): probe it. The spec
                 // name is the basename — `probe` is implicit.
@@ -133,24 +159,23 @@ impl SdkgenBackend for CliBackend {
         }
 
         diagnostics.extend(self.config.apply(&mut spec));
-        spec.validate().map_err(SdkgenError)?;
+        spec.validate().map_err(CodegenError::Parse)?;
 
-        // `emit_spec` — the "probe then hand-tune" workflow: dump the
-        // resolved tree as canonical `.clispec.yaml` (`-` → stdout).
-        if let Some(dest) = &self.config.emit_spec {
-            let yaml = spec.dump();
-            if dest == "-" {
-                print!("{yaml}");
-            } else {
-                std::fs::write(dest, yaml).map_err(|e| {
-                    SdkgenError(format!("failed to write emitted spec `{dest}`: {e}"))
-                })?;
-            }
-        }
+        // `emit_spec` — the "probe then hand-tune" workflow: the dump
+        // travels on the IR (`SdkgenModule::spec_dump`); the registry
+        // writes it post-parse since destinations are arbitrary paths
+        // or stdout, outside the artifact store (PL-004 side-effect
+        // policy — `Source::parse` writes nothing).
+        let spec_dump = self.config.emit_spec.as_ref().map(|dest| SpecDump {
+            yaml: spec.dump(),
+            dest: dest.clone(),
+        });
 
         let target = self.target.clone().unwrap_or_else(|| "host".to_string());
         let mut module = map_spec(&spec, &target);
         module.diagnostics = diagnostics;
+        module.spec_dump = spec_dump;
+        module.source = source_url.map(str::to_string);
         Ok(module)
     }
 }

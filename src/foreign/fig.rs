@@ -197,14 +197,13 @@ fn fig_option(o: &Map<String, Value>, path: &str, node: &mut CommandNode, w: &mu
     if repeatable && !takes_arg {
         anns.push("repeatable".to_string());
     }
-    if let Some(first) = arg_objs.first() {
-        if let Some(n) = first
+    if let Some(first) = arg_objs.first()
+        && let Some(n) = first
             .get("name")
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
-        {
-            anns.push(format!("value: {n}"));
-        }
+    {
+        anns.push(format!("value: {n}"));
     }
     for (key, label) in [
         ("exclusiveOn", "exclusive with"),

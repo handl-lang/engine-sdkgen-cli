@@ -2,7 +2,7 @@
 //! covers `std::process::Command` spawn, capture, stderr fallback, and
 //! the timeout kill path.
 
-use handl_plugin_sdkgen_cli::CommandRunner;
+use handl_plugin_codegen_cli::CommandRunner;
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
