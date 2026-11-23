@@ -8,8 +8,8 @@ binary. Part of the `tool-codegen-*` family. Inputs are authored `*.clispec.yaml
 packages (`handl-lang/lib-cli`).
 
 ```bash
-hnl sdkgen cli gh --output generated/gh          # probe a tool
-hnl sdkgen cli gh.clispec.yaml --output generated/gh   # or a spec
+hnl codegen cli gh --output generated/gh          # probe a tool
+hnl codegen cli gh.clispec.yaml --output generated/gh   # or a spec
 ```
 
 ## Development
@@ -31,9 +31,9 @@ test-runs as-is.
 | Reference | [docs/clispec.md](docs/clispec.md) (spec schema + `--config` overlay + foreign-format mappings) · [docs/probe.md](docs/probe.md) (`--help` scraper) · [docs/emission.md](docs/emission.md) (`SdkgenModule` mapping + output contract) |
 | Explanation | [docs/design.md](docs/design.md) — design rationale |
 
-Framework-level docs (IR, registry, `hnl sdkgen` flags) live in the
+Framework-level docs (IR, registry, `hnl codegen` flags) live in the
 host repo:
-[`host/docs/sdkgen/`](https://github.com/handl-lang/host/blob/main/docs/sdkgen/index.md).
+[`host/docs/codegen/`](https://github.com/handl-lang/host/blob/main/docs/codegen/index.md).
 
 ## License
 

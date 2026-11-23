@@ -136,7 +136,7 @@ Per-node confidence (`ParsedHelp::confidence`):
 
 `ProbeResult.confidence` is the worst per-node level. The backend puts
 `confidence: <level>` first in `module.diagnostics` (followed by the
-warnings), `hnl sdkgen` prints them, and the `hnl-cli` emitter stamps
+warnings), `hnl codegen` prints them, and the `hnl-cli` emitter stamps
 `--- confidence: <level>` on the port plus, on `low`, `--- warning:
 …--help probe is low-confidence; author a .clispec.yaml or pass
 --config to correct it`.

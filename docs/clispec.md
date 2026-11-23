@@ -124,7 +124,7 @@ to stderr), hand-tune, then generate from the spec file.
 
 Three external spec ecosystems ingest directly (`src/foreign/`, one
 file per dialect) — the result is the same `CliSpec` IR, so
-`hnl sdkgen cli gh.fig.json …` works exactly like the yaml input, and
+`hnl codegen cli gh.fig.json …` works exactly like the yaml input, and
 `emit_spec` dumps a canonical `.clispec.yaml` of the imported tree.
 
 Detection order:

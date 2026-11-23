@@ -4,18 +4,18 @@ This walks a real tool — `gh` — from a bare binary to a callable Handl
 SDK: probe its `--help`, emit the port/adapter pair, and invoke a
 command. The only inputs are a tool on `PATH` and `hnl` with the
 `cli` codegen target registered (the default feature set — see
-`host/docs/sdkgen/cli.md`).
+`host/docs/codegen/cli.md`).
 
 ## 1. Probe the tool
 
 ```bash
-hnl sdkgen cli gh --output generated/gh
+hnl codegen cli gh --output generated/gh
 ```
 
 The positional argument is a bare tool name, so the backend probes
 `gh --help`, `gh <sub> --help`, … and parses each page into a command
 tree. Watch stderr: every probe warning lands as a
-`sdkgen: diagnostic: …` line, led by `confidence: high|medium|low`.
+`codegen: diagnostic: …` line, led by `confidence: high|medium|low`.
 Low confidence means the scrape is unreliable — see
 [howto-tune-a-probe.md](./howto-tune-a-probe.md) before trusting the
 output.

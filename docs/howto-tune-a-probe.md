@@ -14,7 +14,7 @@ the emitted port). Two workflows correct it:
 1. Probe once, writing the resolved tree as a spec:
 
    ```bash
-   hnl sdkgen cli gh --output generated/gh --emit-spec gh.clispec.yaml
+   hnl codegen cli gh --output generated/gh --emit-spec gh.clispec.yaml
    ```
 
    `--emit-spec -` prints the spec to stdout instead (diagnostics stay
@@ -39,7 +39,7 @@ the emitted port). Two workflows correct it:
    so the output now reflects your edits exactly:
 
    ```bash
-   hnl sdkgen cli gh.clispec.yaml --output generated/gh
+   hnl codegen cli gh.clispec.yaml --output generated/gh
    ```
 
    `lib-cli-gen`'s `specs/*.clispec.yaml` are the working convention:

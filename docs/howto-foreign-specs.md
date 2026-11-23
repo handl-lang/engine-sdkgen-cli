@@ -26,11 +26,11 @@ works exactly like a `.clispec.yaml` input:
 2. Generate:
 
    ```bash
-   hnl sdkgen cli gh.fig.json --output generated/gh
+   hnl codegen cli gh.fig.json --output generated/gh
    ```
 
 3. Read the warnings. Every construct with no IR analog is reported,
-   not swallowed — `sdkgen: diagnostic: fig gh.checkout: unsupported
+   not swallowed — `codegen: diagnostic: fig gh.checkout: unsupported
    subcommand fields dropped: loadSpec`. Constructs that have meaning
    but no argv shape (`aliases`, `required`, `exclusiveOn`, `intent`,
    `environment`, suggestion `generators`, …) survive as bracketed doc
@@ -41,7 +41,7 @@ works exactly like a `.clispec.yaml` input:
 4. Optional — convert to the canonical spec for curation:
 
    ```bash
-   hnl sdkgen cli gh.fig.json --output generated/gh --emit-spec gh.clispec.yaml
+   hnl codegen cli gh.fig.json --output generated/gh --emit-spec gh.clispec.yaml
    ```
 
    The dump is an ordinary `.clispec.yaml`; edit it as in

@@ -2,7 +2,7 @@
 
 Why the `cli` backend is shaped the way it is. This covers only the
 choices local to this crate — the registry, emitter contract, and
-`SdkgenModule` IR are documented in `host/docs/sdkgen/`.
+`SdkgenModule` IR are documented in `host/docs/codegen/`.
 
 ## One unified help parser
 
