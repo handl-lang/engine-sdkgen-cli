@@ -378,7 +378,7 @@ pub(crate) fn build_adapter(module: &SdkgenModule, adapter_pkg: &str) -> String 
 const HANDL_KEYWORDS: &[&str] = &[
     "absurd", "app", "arr", "as", "axiom", "data", "do", "else", "export", "first", "for", "from",
     "grade", "grades", "handle", "if", "id2", "impl", "import", "in", "infer", "law", "left",
-    "let", "match", "op", "rec", "return", "rewrite", "right", "second", "sort", "then", "trait",
+    "match", "op", "rec", "return", "rewrite", "right", "second", "sort", "then", "trait",
     "type", "where", "while", "with",
 ];
 
