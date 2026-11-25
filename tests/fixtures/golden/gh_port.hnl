@@ -10,8 +10,8 @@ from "cli" import { Output, Spawn }
 --- args:
 ---   branch: base branch
 --- cli: gh pr create
-export GhPrCreate: (String, Obj, [String]) ~[1]~> Result<Output, Spawn>
+export GhPrCreate: (String, Obj, [String]) ~>[1] Result<Output, Spawn>
 
 --- List pull requests
 --- cli: gh pr list
-export GhPrList: () ~[1]~> Result<Output, Spawn>
+export GhPrList: () ~>[1] Result<Output, Spawn>
